@@ -12,8 +12,7 @@ export const config = {
     light: "#9cf5e6",
   },
   motion: {
-    duration: 7,
-    ambientDuration: 11,
+    duration: 4.8,
   },
 } as const;
 

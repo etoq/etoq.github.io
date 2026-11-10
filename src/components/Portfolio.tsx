@@ -81,7 +81,7 @@ export default function Portfolio({ locale }: { locale: Locale }) {
         </div>
       </main>
       <footer className="site-footer"><a className="wordmark" href="#top">eto</a><a href="#top">{copy.top}</a><span>{new Date().getFullYear()}</span></footer>
-      <MotionController labels={{ pause: copy.pause, resume: copy.resume }} />
+      <MotionController />
     </div>
   );
 }

@@ -93,10 +93,6 @@ export default function SignatureScene({ copy }: { copy: PageContent }) {
 
       <div className="hero-outro">
         <div><p>{copy.heroNote}</p><p className="hero-outro-description">{copy.heroNoteBody}</p></div>
-        <div className="motion-controls">
-          <button type="button" data-motion="replay">{copy.replay}</button>
-          <button type="button" data-motion="pause" aria-pressed="false">{copy.pause}</button>
-        </div>
       </div>
     </section>
   );
