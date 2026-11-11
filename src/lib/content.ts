@@ -129,3 +129,40 @@ export const content = {
 };
 
 export type PageContent = (typeof content)[Locale];
+
+export const elfContent = {
+  ru: {
+    intro: "Я начинающий исследователь malware analysis и Linux reverse engineering.",
+    journal: [
+      { title: "Изучаю Linux", body: "Самостоятельно использую команды Linux, знаю синтаксис Python и C. Разбираюсь в ELF, памяти и процессах." },
+      { title: "Проверяю поведение программы", body: "Учусь связывать инструкции и преобразования данных с поведением программы. Проверяю предположения по коду и наблюдениям." },
+      { title: "Участвую в CTF", body: "Применяю знания к практическим задачам. Часть разбираю с подсказками." },
+    ],
+    operations: ["strings / .rodata", "sample / материалы исследования", "trace / события и подтверждения", ".dynsym / связь"],
+    projectIntro: "Код, наблюдения и сигнатуры, полученные в ходе исследования образцов.",
+    achievementIntro: "CTF, исследовательские работы и публикации.",
+    contactIntro: "Контактные данные появятся здесь.",
+    achievementTabs: ["CTF", "исследование", "публикация"],
+    sampleLabel: "Схема ELF64 / x86-64",
+    choose: "Выбрать запись",
+    console: "Что изучаю",
+    consoleHint: "Направления моей практики",
+  },
+  en: {
+    intro: "I’m an aspiring malware analysis and Linux reverse engineering researcher.",
+    journal: [
+      { title: "Exploring Linux", body: "I use Linux commands independently and know Python and C syntax. I’m exploring ELF, memory and processes." },
+      { title: "Tracing program behavior", body: "I’m learning to connect instructions and data transformations to program behavior, testing assumptions against code and observations." },
+      { title: "Taking part in CTFs", body: "I apply what I learn to practical challenges. I work through some of them with guidance." },
+    ],
+    operations: ["strings / .rodata", "sample / research materials", "trace / events and evidence", ".dynsym / contact"],
+    projectIntro: "Code, observations and signatures produced while investigating samples.",
+    achievementIntro: "CTFs, research work and publications.",
+    contactIntro: "Contact details will appear here.",
+    achievementTabs: ["CTF", "research", "publication"],
+    sampleLabel: "Schematic ELF64 / x86-64",
+    choose: "Choose an entry",
+    console: "What I’m learning",
+    consoleHint: "My areas of practice",
+  },
+} as const;

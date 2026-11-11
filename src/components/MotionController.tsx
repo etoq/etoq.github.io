@@ -1,23 +1,22 @@
 "use client";
 
 import { useEffect } from "react";
-import { config } from "@/lib/config";
-import { SCENE_SYMBOLS, type AssemblyFrame } from "@/lib/assembly";
-
-const STEPS = [0, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 5];
-const ENCODED = [0xad, 0xbc, 0xa7];
-const INTRO = 0.35;
-const STEP_DURATION = 0.29;
-const LOOP_DURATION = config.motion.duration + 2;
+import { ELF_FRAME_EVENT, type ElfFrame } from "@/lib/elf";
 
 function clamp(value: number, minimum = 0, maximum = 1) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
 function ease(value: number) {
-  const progress = clamp(value);
-  return progress * progress * (3 - 2 * progress);
+  const bounded = clamp(value);
+  return bounded * bounded * (3 - 2 * bounded);
 }
+
+function inverseEase(value: number) {
+  return 0.5 - Math.sin(Math.asin(1 - 2 * clamp(value)) / 3);
+}
+
+type SceneMetric = { start: number; distance: number };
 
 export default function MotionController() {
   useEffect(() => {
@@ -25,340 +24,297 @@ export default function MotionController() {
     if (!rootElement) return;
     const root = rootElement;
     const scenes = Array.from(root.querySelectorAll<HTMLElement>("[data-scene]"));
-    const panels = scenes.map((scene) => scene.querySelector<HTMLElement>(".scene-panel")!);
-    const contents = panels.map((panel) => panel.querySelector<HTMLElement>(".scene-content")!);
-    const profileItems = Array.from(root.querySelectorAll<HTMLElement>("[data-profile-item]"));
-    const contentOverflow = scenes.map(() => 0);
-    const hero = scenes[0];
-    if (!hero) return;
-    const instructions = Array.from(root.querySelectorAll<HTMLElement>("[data-instruction]"));
-    const bytes = Array.from(root.querySelectorAll<HTMLElement>("[data-byte]"));
-    const decodedName = root.querySelector<HTMLElement>("[data-decoded-name]");
-    const counter = root.querySelector<HTMLElement>("[data-ecx]");
+    const windows = scenes.map((scene) => scene.querySelector<HTMLElement>(".scene-copy-window")!);
+    const contents = scenes.map((scene) => scene.querySelector<HTMLElement>(".scene-content")!);
+    const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-section-link]"));
+    const anchors = Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href^="#"]'));
+    const language = root.querySelector<HTMLAnchorElement>("[data-language-link]");
+    const languagePath = language?.getAttribute("href") ?? "/";
+    const sampleLocation = root.querySelector<HTMLElement>("[data-sample-location]");
+    const consolePanel = root.querySelector<HTMLDetailsElement>(".focus-console");
     const consoleCommand = root.querySelector<HTMLElement>("[data-console-command]");
     const command = consoleCommand?.dataset.command ?? "";
     const consoleRows = Array.from(root.querySelectorAll<HTMLElement>("[data-console-row]"));
-    const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-section-link]"));
-    const languageLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-language-link]"));
-    const addressLabel = root.querySelector<HTMLElement>("[data-hud-address]");
-    const symbolLabel = root.querySelector<HTMLElement>("[data-hud-symbol]");
-    const sectionLabel = root.querySelector<HTMLElement>("[data-hud-section]");
-    const progressLabel = root.querySelector<HTMLElement>("[data-hud-progress]");
     const motionQuery = matchMedia("(prefers-reduced-motion: reduce)");
     const pointerQuery = matchMedia("(hover: hover) and (pointer: fine)");
     const styleCache = new WeakMap<HTMLElement, Map<string, string>>();
-
+    const overflow = scenes.map(() => 0);
+    let metrics: SceneMetric[] = [];
     let reduced = motionQuery.matches;
     let frameId: number | null = null;
+    let layoutId: number | null = null;
     let previousTime: number | null = null;
-    let lastCanvasPaint = -Infinity;
+    let lastPaint = -Infinity;
     let elapsed = 0;
-    let loopTime = 0;
-    let loopCount = 0;
-    let previousStep = -2;
-    let scrollDirty = true;
-    let targetScroll = scrollY;
     let renderedScroll = scrollY;
-    let scenePosition = 0;
-    let progress = 0;
+    let targetScroll = scrollY;
+    let dirty = true;
+    let activeIndex = 0;
+    let phase = 0;
+    let canvasTarget = 0;
+    let canvasPosition = 0;
     let pointerX = 0;
     let pointerY = 0;
-    let pointerTargetX = 0;
-    let pointerTargetY = 0;
-    let heroVisible = true;
-    let activeSection = "top";
+    let targetPointerX = 0;
+    let targetPointerY = 0;
+    let consoleStartedAt = 0;
     let disposed = false;
-    let sceneMetrics: Array<{ start: number; distance: number }> = [];
 
     function setStyle(element: HTMLElement, name: string, value: string) {
       let cache = styleCache.get(element);
-      if (!cache) {
-        cache = new Map();
-        styleCache.set(element, cache);
-      }
+      if (!cache) { cache = new Map(); styleCache.set(element, cache); }
       if (cache.get(name) === value) return;
       cache.set(name, value);
       element.style.setProperty(name, value);
     }
 
-    function renderLoop() {
-      const time = reduced ? config.motion.duration : Math.min(loopTime, config.motion.duration);
-      const step = clamp(Math.floor((time - INTRO) / STEP_DURATION), -1, STEPS.length - 1);
-      root.dataset.sceneComplete = String(time >= config.motion.duration);
-      root.dataset.loopCount = String(loopCount);
-      setStyle(root, "--sweep", `${(-220 + time / config.motion.duration * 1320).toFixed(1)}px`);
-      if (step === previousStep) return;
-      previousStep = step;
-      const instruction = step < 0 ? -1 : STEPS[step];
-      const decodedCount = clamp(Math.floor((step + 3) / 4), 0, 3);
-      const remaining = 3 - clamp(Math.floor((step + 1) / 4), 0, 3);
-      instructions.forEach((element) => {
-        element.classList.toggle("is-current", Number(element.dataset.instruction) === instruction);
-      });
-      bytes.forEach((element, index) => {
-        const done = index < decodedCount;
-        element.textContent = (done ? ENCODED[index] ^ 0xc8 : ENCODED[index]).toString(16).padStart(2, "0");
-        element.dataset.done = String(done);
-        element.dataset.current = String(step >= 1 && step < 13 && index === Math.floor((step - 1) / 4));
-      });
-      if (decodedName) decodedName.textContent = "eto".slice(0, decodedCount).padEnd(3, "·");
-      if (counter) counter.textContent = String(remaining);
+    function requestFrame() {
+      if (!disposed && !document.hidden && frameId === null) frameId = requestAnimationFrame(update);
     }
 
     function measureLayout() {
-      const viewport = innerHeight;
-      let previousIndex = 0;
-      sceneMetrics.forEach((metric, index) => {
-        if (scrollY >= metric.start) previousIndex = index;
+      layoutId = null;
+      if (disposed) return;
+      const previousMetric = metrics[activeIndex];
+      const fraction = previousMetric ? clamp((scrollY - previousMetric.start) / previousMetric.distance) : 0;
+      const previousOverflow = overflow[activeIndex];
+      const previousPan = parseFloat(scenes[activeIndex].style.getPropertyValue("--content-pan")) || 0;
+      scenes.forEach((scene, index) => {
+        overflow[index] = reduced ? 0 : Math.max(0, contents[index].scrollHeight - windows[index].clientHeight);
+        const distance = innerHeight * 1.55 + overflow[index] * 1.6;
+        const height = distance + (index === scenes.length - 1 ? innerHeight : 0);
+        setStyle(scene, "--track-height", `${Math.ceil(height)}px`);
+        scene.dataset.overflow = String(overflow[index] > 0);
       });
-      const previousMetric = sceneMetrics[previousIndex];
-      const previousFraction = previousMetric ? clamp((scrollY - previousMetric.start) / previousMetric.distance) : 0;
-      contents.forEach((content, index) => {
-        const style = getComputedStyle(panels[index]);
-        const available = panels[index].clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-        contentOverflow[index] = reduced ? 0 : Math.max(0, content.scrollHeight - available);
-        const holdDistance = viewport * 1.35 + contentOverflow[index] * 1.2;
-        const trackHeight = index === scenes.length - 1 ? viewport + holdDistance : holdDistance;
-        setStyle(scenes[index], "--track-height", `${Math.ceil(trackHeight)}px`);
-        scenes[index].dataset.overflow = String(contentOverflow[index] > 0);
-      });
-      sceneMetrics = scenes.map((scene, index) => ({
+      metrics = scenes.map((scene, index) => ({
         start: scene.offsetTop,
-        distance: Math.max(1, scene.offsetHeight - (index === scenes.length - 1 ? viewport : 0)),
+        distance: Math.max(1, scene.offsetHeight - (!reduced && index === scenes.length - 1 ? innerHeight : 0)),
       }));
       if (previousMetric && !reduced) {
-        const current = sceneMetrics[previousIndex];
-        const destination = current.start + previousFraction * current.distance;
-        if (Math.abs(destination - scrollY) > 1) {
-          scrollTo({ top: destination, behavior: "instant" });
-          renderedScroll = scrollY;
-        }
+        const nextOverflow = overflow[activeIndex];
+        const preservePan = previousOverflow !== nextOverflow && fraction < 0.72;
+        const nextFraction = preservePan ? inverseEase(nextOverflow > 0 ? previousPan / nextOverflow : 0) * 0.67 : fraction;
+        const destination = metrics[activeIndex].start + nextFraction * metrics[activeIndex].distance;
+        if (Math.abs(destination - scrollY) > 1) scrollTo({ top: destination, behavior: "instant" });
       }
-      targetScroll = scrollY;
-      scrollDirty = true;
+      renderedScroll = targetScroll = scrollY;
+      dirty = true;
       requestFrame();
+      queueMicrotask(() => {
+        if (document.activeElement instanceof HTMLElement) ensureFocusVisible(document.activeElement);
+      });
+    }
+
+    function scheduleLayout() {
+      if (!disposed && layoutId === null) layoutId = requestAnimationFrame(measureLayout);
     }
 
     function renderScroll() {
-      scrollDirty = false;
-      const viewport = innerHeight;
-      const lastIndex = scenes.length - 1;
-      const maximumScroll = document.documentElement.scrollHeight - viewport;
-      progress = maximumScroll > 0 ? clamp(scrollY / maximumScroll) : 0;
-      setStyle(root, "--scroll-progress", progress.toFixed(5));
-      if (progressLabel) progressLabel.textContent = `${Math.round(progress * 100)}%`;
-
-      let stageIndex = 0;
-      sceneMetrics.forEach((metric, index) => {
-        if (renderedScroll >= metric.start) stageIndex = index;
-      });
-      const stage = sceneMetrics[stageIndex];
-      const fraction = clamp((renderedScroll - stage.start) / stage.distance);
-      scenePosition = Math.min(lastIndex, stageIndex + fraction);
-      const foregroundPosition = Math.min(lastIndex, stageIndex + ease((fraction - 0.68) / 0.32));
-      const dominantIndex = Math.round(foregroundPosition);
-      const nextSection = scenes[dominantIndex].id;
-      heroVisible = foregroundPosition < 1;
-      setStyle(root, "--hero-progress", "0");
-
+      if (!metrics.length) return;
+      dirty = false;
+      let stage = 0;
+      metrics.forEach((metric, index) => { if (renderedScroll >= metric.start) stage = index; });
+      const fraction = clamp((renderedScroll - metrics[stage].start) / metrics[stage].distance);
+      canvasTarget = reduced ? stage : Math.min(scenes.length - 1, stage + fraction);
+      phase = reduced ? stage : Math.min(scenes.length - 1, stage + ease((fraction - 0.72) / 0.28));
+      const dominant = Math.round(phase);
       const focusedScene = scenes.find((scene) => scene.contains(document.activeElement));
       scenes.forEach((scene, index) => {
-        const difference = foregroundPosition - index;
+        const difference = phase - index;
         const visibility = ease(1 - Math.abs(difference) * 2);
-        const localProgress = index === stageIndex ? fraction : index < stageIndex ? 1 : 0;
-        const holdProgress = ease((localProgress - 0.03) / 0.62);
-        const active = index === dominantIndex;
+        const localProgress = index === stage ? fraction : index < stage ? 1 : 0;
         setStyle(scene, "--scene-opacity", reduced ? "1" : visibility.toFixed(4));
-        setStyle(scene, "--scene-scale", reduced ? "1" : (0.97 + visibility * 0.03).toFixed(4));
-        setStyle(scene, "--scene-x", reduced ? "0px" : `${((difference > 0 ? -1 : 1) * (1 - visibility) * 24).toFixed(2)}px`);
-        setStyle(scene, "--scene-blur", reduced ? "0px" : `${((1 - visibility) * 5).toFixed(2)}px`);
-        setStyle(scene, "--content-pan", `${(contentOverflow[index] * holdProgress).toFixed(2)}px`);
-        setStyle(scene, "--scene-reveal", reduced ? "1" : holdProgress.toFixed(4));
-        scene.dataset.visible = String(reduced || active || visibility > 0.001);
-        scene.dataset.active = String(active);
-        scene.inert = !reduced && !active;
-        scene.setAttribute("aria-hidden", String(!reduced && !active));
+        setStyle(scene, "--scene-x", reduced ? "0px" : `${(-difference * 14).toFixed(2)}px`);
+        setStyle(scene, "--content-pan", reduced ? "0px" : `${(overflow[index] * ease(localProgress / 0.67)).toFixed(2)}px`);
+        scene.dataset.visible = String(reduced || index === dominant || visibility > 0.001);
+        scene.dataset.active = String(index === dominant);
+        scene.inert = !reduced && index !== dominant;
+        scene.setAttribute("aria-hidden", String(!reduced && index !== dominant));
       });
-      if (!reduced && focusedScene && focusedScene !== scenes[dominantIndex]) {
-        const heading = scenes[dominantIndex].querySelector<HTMLElement>("h1, h2");
-        if (heading) {
-          heading.tabIndex = -1;
-          heading.focus({ preventScroll: true });
-        }
+      if (!reduced && focusedScene && focusedScene !== scenes[dominant]) {
+        const heading = scenes[dominant].querySelector<HTMLElement>("h1, h2");
+        if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
       }
-      if (nextSection !== activeSection) {
-        activeSection = nextSection;
-        root.dataset.activeSection = activeSection;
-        navLinks.forEach((link) => {
-          if (link.hash === `#${activeSection}`) link.setAttribute("aria-current", "location");
-          else link.removeAttribute("aria-current");
-        });
-      }
-      if (sectionLabel) sectionLabel.textContent = navLinks.find((link) => link.hash === `#${activeSection}`)?.textContent ?? "eto";
-      const symbol = SCENE_SYMBOLS[Math.round(scenePosition)];
-      if (addressLabel) addressLabel.textContent = symbol.address;
-      if (symbolLabel) symbolLabel.textContent = symbol.label;
-
-      const learningProgress = stageIndex === 2 ? ease(fraction / 0.65) : stageIndex > 2 ? 1 : 0;
-      if (consoleCommand) consoleCommand.textContent = command.slice(0, Math.floor(clamp(learningProgress * 4) * command.length));
-      if (reduced && consoleCommand) consoleCommand.textContent = command;
-      consoleRows.forEach((row, index) => {
-        const reveal = reduced ? 1 : clamp((learningProgress - 0.12 - index * 0.2) / 0.22);
-        setStyle(row, "--row-reveal", reveal.toFixed(4));
-        row.dataset.current = String(reveal > 0 && reveal < 1);
+      activeIndex = dominant;
+      root.dataset.activeSection = scenes[dominant].id;
+      root.dataset.phase = phase.toFixed(4);
+      navLinks.forEach((link) => {
+        if (link.hash === `#${scenes[dominant].id}`) link.setAttribute("aria-current", "location");
+        else link.removeAttribute("aria-current");
       });
-      const profileProgress = stageIndex === 1 ? ease(fraction / 0.65) : stageIndex > 1 ? 1 : 0;
-      profileItems.forEach((item, index) => {
-        const reveal = reduced || index < 3 ? 1 : clamp((profileProgress + 0.1 - (index - 3) * 0.18) / 0.24);
-        setStyle(item, "--profile-reveal", reveal.toFixed(4));
-      });
+      if (language) language.href = `${languagePath}#${scenes[dominant].id}`;
+      if (sampleLocation) sampleLocation.textContent = [".rodata", "sections", "trace", ".dynsym"][dominant];
+      const maximum = document.documentElement.scrollHeight - innerHeight;
+      setStyle(root, "--scroll-progress", maximum > 0 ? clamp(scrollY / maximum).toFixed(5) : "0");
     }
 
     function paintCanvas() {
-      const detail: AssemblyFrame = { scene: scenePosition, progress, time: elapsed, pointerX, pointerY, reduced };
-      dispatchEvent(new CustomEvent<AssemblyFrame>("eto:motion-frame", { detail }));
+      const detail: ElfFrame = {
+        phase: canvasPosition, time: elapsed, pointerX, pointerY, reduced,
+        selected: scenes.map((scene) => Number(scene.dataset.selected) || 0),
+      };
+      dispatchEvent(new CustomEvent<ElfFrame>(ELF_FRAME_EVENT, { detail }));
     }
 
-    function requestFrame() {
-      if (disposed || document.hidden || frameId !== null) return;
-      frameId = requestAnimationFrame(update);
-    }
-
-    function stopFrame() {
-      if (frameId !== null) cancelAnimationFrame(frameId);
-      frameId = null;
-      previousTime = null;
+    function renderConsole() {
+      if (!consolePanel?.open) return;
+      const progress = reduced ? 1 : clamp((elapsed - consoleStartedAt) / 1.6);
+      if (consoleCommand) consoleCommand.textContent = command.slice(0, Math.floor(clamp(progress * 3) * command.length));
+      consoleRows.forEach((row, index) => setStyle(row, "--row-reveal", (reduced ? 1 : ease((progress - 0.15 - index * 0.2) / 0.25)).toFixed(4)));
     }
 
     function update(timestamp: number) {
       frameId = null;
       if (disposed || document.hidden) return;
-      const elapsedDelta = previousTime === null ? 0 : Math.max(0, (timestamp - previousTime) / 1000);
-      const delta = elapsedDelta || 1 / 60;
+      const delta = previousTime === null ? 1 / 60 : Math.min(0.1, Math.max(0, (timestamp - previousTime) / 1000));
       previousTime = timestamp;
-      const damping = reduced ? 1 : 1 - Math.exp(-delta * 11);
+      elapsed += delta;
+      const damping = reduced ? 1 : 1 - Math.exp(-delta * 12);
       const difference = targetScroll - renderedScroll;
       renderedScroll = Math.abs(difference) > 0.1 ? renderedScroll + difference * damping : targetScroll;
-      const moving = Math.abs(difference) > 0.1;
-      pointerX += (pointerTargetX - pointerX) * damping;
-      pointerY += (pointerTargetY - pointerY) * damping;
+      pointerX += (targetPointerX - pointerX) * damping;
+      pointerY += (targetPointerY - pointerY) * damping;
       if (reduced) pointerX = pointerY = 0;
-      setStyle(root, "--pointer-x", pointerX.toFixed(4));
-      setStyle(root, "--pointer-y", pointerY.toFixed(4));
-      if (scrollDirty || moving) renderScroll();
-      if (!reduced) {
-        elapsed += elapsedDelta;
-        if (heroVisible) {
-          loopTime += elapsedDelta;
-          if (loopTime >= LOOP_DURATION) {
-            loopCount += Math.floor(loopTime / LOOP_DURATION);
-            loopTime %= LOOP_DURATION;
-          }
-          renderLoop();
-        }
-      }
-      if (reduced || timestamp - lastCanvasPaint >= 32) {
-        paintCanvas();
-        lastCanvasPaint = timestamp;
-      }
-      if (!reduced || moving) requestFrame();
+      if (dirty || Math.abs(difference) > 0.1) renderScroll();
+      canvasPosition = reduced ? canvasTarget : canvasPosition + (canvasTarget - canvasPosition) * damping;
+      renderConsole();
+      if (reduced || timestamp - lastPaint >= 32) { paintCanvas(); lastPaint = timestamp; }
+      if (!reduced || Math.abs(difference) > 0.1) requestFrame();
       else previousTime = null;
     }
 
-    function onScroll() {
-      targetScroll = scrollY;
-      scrollDirty = true;
-      requestFrame();
-    }
-
+    function onScroll() { targetScroll = scrollY; dirty = true; requestFrame(); }
+    function resetPointer() { targetPointerX = targetPointerY = 0; requestFrame(); }
     function onPointerMove(event: PointerEvent) {
       if (reduced || !pointerQuery.matches) return;
-      pointerTargetX = clamp(event.clientX / innerWidth * 2 - 1, -1, 1);
-      pointerTargetY = clamp(event.clientY / innerHeight * 2 - 1, -1, 1);
+      targetPointerX = clamp(event.clientX / innerWidth * 2 - 1, -1, 1);
+      targetPointerY = clamp(event.clientY / innerHeight * 2 - 1, -1, 1);
       requestFrame();
     }
-
-    function resetPointer() {
-      pointerTargetX = pointerTargetY = 0;
-      requestFrame();
-    }
-
-    function onReducedMotion(event: MediaQueryListEvent) {
-      reduced = event.matches;
-      root.dataset.reducedMotion = String(reduced);
-      previousStep = -2;
-      measureLayout();
-      const current = scenes.find((scene) => scene.id === activeSection);
-      if (current) scrollTo({ top: current.offsetTop, behavior: "instant" });
-      renderedScroll = targetScroll = scrollY;
-      resetPointer();
-      renderLoop();
+    function goTo(index: number, updateHistory = true) {
+      const target = scenes[clamp(index, 0, scenes.length - 1)];
+      if (updateHistory) history.replaceState(null, "", `#${target.id}`);
+      scrollTo({ top: target.offsetTop, behavior: reduced ? "instant" : "smooth" });
       onScroll();
     }
-
-    function onVisibility() {
-      if (document.hidden) stopFrame();
-      else onScroll();
+    function indexForHash(hash: string) {
+      const id = ["top", "main", "learning"].includes(hash) ? "about" : hash;
+      return scenes.findIndex((scene) => scene.id === id);
     }
-
-    function preserveLanguageAnchor(event: MouseEvent) {
-      const link = event.currentTarget as HTMLAnchorElement;
-      const destination = link.getAttribute("href")?.split("#")[0];
-      if (destination) link.setAttribute("href", `${destination}#${activeSection}`);
+    function onAnchor(event: MouseEvent) {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const anchor = event.currentTarget as HTMLAnchorElement;
+      const hash = anchor.hash.slice(1);
+      const index = indexForHash(hash);
+      if (index < 0) return;
+      event.preventDefault();
+      goTo(index);
+      if (hash === "main") {
+        const heading = scenes[index].querySelector<HTMLElement>("h1, h2");
+        if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+      }
     }
-
     function onKeyboard(event: KeyboardEvent) {
       if (event.altKey || event.ctrlKey || event.metaKey) return;
       const target = event.target;
-      if (target instanceof HTMLElement && (target.isContentEditable || target.matches("input, textarea, select"))) return;
+      if (target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select, button, summary"))) return;
       const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
       if (!direction) return;
       event.preventDefault();
-      const index = scenes.findIndex((scene) => scene.id === activeSection);
-      const next = scenes[clamp(index + direction, 0, scenes.length - 1)];
-      next.scrollIntoView({ behavior: reduced ? "instant" : "smooth", block: "start" });
+      goTo(activeIndex + direction);
+    }
+    function onReducedMotion(event: MediaQueryListEvent) {
+      reduced = event.matches;
+      root.dataset.reducedMotion = String(reduced);
+      previousTime = null;
+      resetPointer();
+      measureLayout();
+      goTo(activeIndex, false);
+    }
+    function onVisibility() {
+      if (document.hidden) {
+        if (frameId !== null) cancelAnimationFrame(frameId);
+        frameId = null; previousTime = null;
+      } else onScroll();
+    }
+    function onConsoleToggle() { consoleStartedAt = elapsed; scheduleLayout(); requestFrame(); }
+    function onHashChange() {
+      const id = location.hash.slice(1);
+      const index = indexForHash(id);
+      if (id === "learning" && consolePanel) consolePanel.open = true;
+      if (index >= 0) goTo(index, false);
+    }
+    function ensureFocusVisible(targetElement: HTMLElement) {
+      if (disposed || reduced) return;
+      const content = targetElement.closest<HTMLElement>(".scene-content");
+      const index = content ? contents.indexOf(content) : -1;
+      if (index !== activeIndex || overflow[index] <= 0) return;
+      if (Math.abs(phase - index) > 0.01) return;
+      scrollTo({ top: renderedScroll, behavior: "instant" });
+      renderedScroll = targetScroll = scrollY;
+      dirty = true;
+      requestFrame();
+      const windowElement = windows[index];
+      windowElement.scrollTop = 0;
+      const area = windowElement.getBoundingClientRect();
+      const target = targetElement.getBoundingClientRect();
+      let pan = parseFloat(scenes[index].style.getPropertyValue("--content-pan")) || 0;
+      if (target.top < area.top + 8) pan += target.top - area.top - 8;
+      else if (target.bottom > area.bottom - 24) pan += target.bottom - area.bottom + 24;
+      else return;
+      const fraction = inverseEase(clamp(pan / overflow[index])) * 0.67;
+      scrollTo({ top: metrics[index].start + fraction * metrics[index].distance, behavior: "instant" });
+      renderedScroll = targetScroll = scrollY;
+      dirty = true;
+      requestFrame();
+    }
+    function onFocus(event: FocusEvent) {
+      if (event.target instanceof HTMLElement) ensureFocusVisible(event.target);
     }
 
-    const resizeObserver = new ResizeObserver(measureLayout);
-    contents.forEach((content) => resizeObserver.observe(content));
+    const resizeObserver = new ResizeObserver(scheduleLayout);
+    contents.forEach((element) => resizeObserver.observe(element));
+    const selectionObserver = new MutationObserver(() => requestFrame());
+    selectionObserver.observe(root, { subtree: true, attributes: true, attributeFilter: ["data-selected"] });
     addEventListener("scroll", onScroll, { passive: true });
-    addEventListener("resize", measureLayout, { passive: true });
-    addEventListener("keydown", onKeyboard);
+    addEventListener("resize", scheduleLayout, { passive: true });
     addEventListener("pointermove", onPointerMove, { passive: true });
+    addEventListener("keydown", onKeyboard);
+    addEventListener("hashchange", onHashChange);
     document.addEventListener("pointerleave", resetPointer);
     document.addEventListener("visibilitychange", onVisibility);
+    root.addEventListener("focusin", onFocus);
     motionQuery.addEventListener("change", onReducedMotion);
-    pointerQuery.addEventListener("change", resetPointer);
-    languageLinks.forEach((link) => link.addEventListener("click", preserveLanguageAnchor));
+    consolePanel?.addEventListener("toggle", onConsoleToggle);
+    anchors.forEach((anchor) => anchor.addEventListener("click", onAnchor));
     root.dataset.motionReady = "true";
     root.dataset.reducedMotion = String(reduced);
     measureLayout();
-    const initialScene = scenes.find((scene) => scene.id === location.hash.slice(1));
-    if (initialScene) scrollTo({ top: initialScene.offsetTop, behavior: "instant" });
+    const initialId = location.hash.slice(1);
+    const initial = indexForHash(initialId);
+    if (initial >= 0) scrollTo({ top: scenes[initial].offsetTop, behavior: "instant" });
+    if (initialId === "learning" && consolePanel) consolePanel.open = true;
     renderedScroll = targetScroll = scrollY;
-    renderLoop();
-    renderScroll();
-    paintCanvas();
-    requestFrame();
-    document.fonts.ready.then(() => { if (!disposed) measureLayout(); });
+    renderScroll(); canvasPosition = canvasTarget; paintCanvas(); requestFrame();
+    document.fonts.ready.then(() => { if (!disposed) scheduleLayout(); });
 
     return () => {
       disposed = true;
-      stopFrame();
-      resizeObserver.disconnect();
-      scenes.forEach((scene) => {
-        scene.inert = false;
-        scene.removeAttribute("aria-hidden");
-      });
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      if (layoutId !== null) cancelAnimationFrame(layoutId);
+      resizeObserver.disconnect(); selectionObserver.disconnect();
+      scenes.forEach((scene) => { scene.inert = false; scene.removeAttribute("aria-hidden"); });
       removeEventListener("scroll", onScroll);
-      removeEventListener("resize", measureLayout);
-      removeEventListener("keydown", onKeyboard);
+      removeEventListener("resize", scheduleLayout);
       removeEventListener("pointermove", onPointerMove);
+      removeEventListener("keydown", onKeyboard);
+      removeEventListener("hashchange", onHashChange);
       document.removeEventListener("pointerleave", resetPointer);
       document.removeEventListener("visibilitychange", onVisibility);
+      root.removeEventListener("focusin", onFocus);
       motionQuery.removeEventListener("change", onReducedMotion);
-      pointerQuery.removeEventListener("change", resetPointer);
-      languageLinks.forEach((link) => link.removeEventListener("click", preserveLanguageAnchor));
+      consolePanel?.removeEventListener("toggle", onConsoleToggle);
+      anchors.forEach((anchor) => anchor.removeEventListener("click", onAnchor));
       delete root.dataset.motionReady;
     };
   }, []);
