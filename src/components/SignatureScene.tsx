@@ -71,9 +71,6 @@ export default function SignatureScene({ copy }: { copy: PageContent }) {
               <span className="register">ecx <strong data-ecx>0</strong></span>
             </div>
           </div>
-          <a className="scroll-cue" href="#about" aria-label={copy.navigation.about}>
-            <span>{copy.scroll}</span><i aria-hidden="true" />
-          </a>
         </div>
       </div>
     </section>

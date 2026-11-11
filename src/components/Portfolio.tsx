@@ -4,6 +4,7 @@ import SignatureScene from "./SignatureScene";
 import AssemblyBackdrop from "./AssemblyBackdrop";
 import AnalysisConsole from "./AnalysisConsole";
 import MotionController from "./MotionController";
+import ResearchProfile from "./ResearchProfile";
 
 export default function Portfolio({ locale }: { locale: Locale }) {
   const copy = content[locale];
@@ -38,10 +39,7 @@ export default function Portfolio({ locale }: { locale: Locale }) {
           <div className="scene-panel">
             <div className="scene-content about-content">
               <h2 id="about-title">{copy.about.title}</h2>
-              <div className="about-copy">
-                {copy.about.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-                <p className="practice-copy">{copy.about.practice}</p>
-              </div>
+              <ResearchProfile copy={copy} locale={locale} />
             </div>
           </div>
         </section>

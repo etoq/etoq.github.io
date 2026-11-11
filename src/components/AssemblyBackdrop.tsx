@@ -3,41 +3,31 @@
 import { useEffect, useRef } from "react";
 import { assemblyBlocks, type AssemblyBlock, type AssemblyFrame } from "@/lib/assembly";
 
-type Camera = {
-  x: number;
-  y: number;
-  zoom: number;
-  angle: number;
-  focus: string;
-};
+type Camera = { x: number; y: number; zoom: number; angle: number; focus: string };
+type Connection = { from: string; to: string; bend: number; label?: string };
 
 const cameras: Camera[] = [
-  { x: 590, y: 190, zoom: 0.85, angle: -0.075, focus: "header" },
-  { x: 170, y: -45, zoom: 0.96, angle: -0.035, focus: "entry" },
-  { x: 390, y: 825, zoom: 0.94, angle: 0.015, focus: "decode" },
-  { x: 1090, y: 270, zoom: 0.9, angle: -0.065, focus: "sections" },
-  { x: 905, y: 1085, zoom: 0.94, angle: -0.025, focus: "done" },
-  { x: 1280, y: 805, zoom: 0.98, angle: 0.025, focus: "data" },
+  { x: 730, y: 215, zoom: 0.8, angle: -0.12, focus: "header" },
+  { x: 250, y: -80, zoom: 0.95, angle: -0.055, focus: "entry" },
+  { x: 440, y: 1025, zoom: 0.95, angle: 0.045, focus: "decode" },
+  { x: 1390, y: 370, zoom: 0.86, angle: -0.085, focus: "sections" },
+  { x: 1060, y: 1330, zoom: 0.97, angle: -0.04, focus: "done" },
+  { x: 1640, y: 1050, zoom: 1.02, angle: 0.045, focus: "data" },
 ];
 
-const branches = [
-  { points: [[350, -145], [420, -145], [420, -20], [490, -20]], condition: "" },
-  { points: [[895, 0], [960, 0], [960, 220], [1030, 220]], condition: "ELF64" },
-  { points: [[490, 60], [65, 60], [65, 360]], condition: "jne" },
-  { points: [[1210, 328], [1210, 470], [897, 470], [897, 540]], condition: "" },
-  { points: [[720, 640], [635, 640], [635, 875], [560, 875]], condition: "" },
-  { points: [[175, 945], [90, 945], [90, 825], [175, 825]], condition: "jnz" },
-  { points: [[367, 1001], [367, 1160], [795, 1160]], condition: "ecx = 0" },
-  { points: [[1280, 855], [1175, 855], [1175, 640], [1075, 640]], condition: "rip-relative" },
+const connections: Connection[] = [
+  { from: "entry", to: "header", bend: 0.25 },
+  { from: "header", to: "sections", bend: 0.45, label: "ELF64" },
+  { from: "header", to: "reject", bend: -0.7, label: "jne" },
+  { from: "sections", to: "strings", bend: 0.35 },
+  { from: "strings", to: "decode", bend: -0.25 },
+  { from: "decode", to: "decode", bend: -1, label: "jnz" },
+  { from: "decode", to: "done", bend: 0.45, label: "ecx = 0" },
+  { from: "strings", to: "data", bend: 0.4, label: "rip-relative" },
 ];
 
 const initialFrame: AssemblyFrame = {
-  scene: 0,
-  progress: 0,
-  time: 0,
-  pointerX: 0,
-  pointerY: 0,
-  reduced: false,
+  scene: 0, progress: 0, time: 0, pointerX: 0, pointerY: 0, reduced: false,
 };
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -45,7 +35,7 @@ function clamp(value: number, minimum: number, maximum: number) {
 }
 
 function blockHeight(block: AssemblyBlock) {
-  return 72 + block.instructions.length * 28;
+  return 62 + block.instructions.length * 33;
 }
 
 export default function AssemblyBackdrop() {
@@ -58,6 +48,26 @@ export default function AssemblyBackdrop() {
     const context = canvas?.getContext("2d", { alpha: false });
     if (!host || !canvas || !context) return;
     const drawing = context;
+    const blockById = new Map(assemblyBlocks.map((block) => [block.id, block]));
+    const blockTextures = new Map<string, HTMLCanvasElement>();
+    const grid = new Path2D();
+    const crosses = new Path2D();
+    for (let x = -1000; x <= 2900; x += 100) {
+      grid.moveTo(x, -1300);
+      grid.lineTo(x, 2300);
+    }
+    for (let y = -1300; y <= 2300; y += 100) {
+      grid.moveTo(-1000, y);
+      grid.lineTo(2900, y);
+    }
+    for (let x = -800; x <= 2800; x += 400) {
+      for (let y = -1200; y <= 2200; y += 400) {
+        crosses.moveTo(x - 4, y);
+        crosses.lineTo(x + 4, y);
+        crosses.moveTo(x, y - 4);
+        crosses.lineTo(x, y + 4);
+      }
+    }
 
     let frame = initialFrame;
     let width = 0;
@@ -66,143 +76,184 @@ export default function AssemblyBackdrop() {
     let disposed = false;
     let monoFamily = "monospace";
 
-    function drawGrid() {
-      drawing.lineWidth = 0.7;
-      drawing.strokeStyle = "rgba(75, 133, 126, 0.12)";
-      drawing.beginPath();
-      for (let x = -900; x <= 2500; x += 100) {
-        drawing.moveTo(x, -1000);
-        drawing.lineTo(x, 1900);
-      }
-      for (let y = -1000; y <= 1900; y += 100) {
-        drawing.moveTo(-900, y);
-        drawing.lineTo(2500, y);
-      }
-      drawing.stroke();
-
-      drawing.strokeStyle = "rgba(83, 159, 148, 0.2)";
-      drawing.beginPath();
-      for (let x = -800; x <= 2400; x += 400) {
-        for (let y = -800; y <= 1600; y += 400) {
-          drawing.moveTo(x - 5, y);
-          drawing.lineTo(x + 5, y);
-          drawing.moveTo(x, y - 5);
-          drawing.lineTo(x, y + 5);
-        }
-      }
-      drawing.stroke();
+    function makeBlockTextures() {
+      blockTextures.clear();
+      assemblyBlocks.forEach((block) => {
+        const texture = document.createElement("canvas");
+        texture.width = Math.ceil((block.width + 32) * pixelRatio);
+        texture.height = Math.ceil((blockHeight(block) + 26) * pixelRatio);
+        const ink = texture.getContext("2d");
+        if (!ink) return;
+        ink.scale(pixelRatio, pixelRatio);
+        ink.translate(10, 10);
+        const surface = ink.createLinearGradient(0, 0, block.width, blockHeight(block));
+        surface.addColorStop(0, "rgba(7, 22, 24, 0.93)");
+        surface.addColorStop(0.75, "rgba(3, 12, 15, 0.65)");
+        surface.addColorStop(1, "rgba(3, 12, 15, 0.02)");
+        ink.fillStyle = surface;
+        ink.fillRect(0, 0, block.width, blockHeight(block));
+        ink.strokeStyle = "rgba(83, 141, 127, 0.45)";
+        ink.lineWidth = 1;
+        ink.beginPath();
+        ink.moveTo(0, blockHeight(block));
+        ink.lineTo(0, 0);
+        ink.lineTo(block.width, 0);
+        ink.stroke();
+        ink.strokeStyle = "rgba(54, 114, 102, 0.2)";
+        ink.beginPath();
+        ink.moveTo(72, 39);
+        ink.lineTo(72, blockHeight(block) - 12);
+        ink.moveTo(0, 39);
+        ink.lineTo(block.width, 39);
+        ink.stroke();
+        ink.font = `500 15px ${monoFamily}`;
+        ink.fillStyle = "#8bc9b9";
+        ink.fillText(`${block.label}:`, 16, 25);
+        ink.font = `400 10px ${monoFamily}`;
+        ink.fillStyle = "rgba(122, 175, 159, 0.72)";
+        ink.textAlign = "right";
+        ink.fillText(`0x${block.address.toString(16)}`, block.width - 12, 24);
+        ink.textAlign = "left";
+        let address = block.address;
+        block.instructions.forEach((instruction, index) => {
+          const baseline = 65 + index * 33;
+          const bytes = block.bytes[index];
+          ink.font = `400 10px ${monoFamily}`;
+          ink.fillStyle = "rgba(95, 156, 137, 0.72)";
+          ink.fillText(address.toString(16).slice(-4), 14, baseline);
+          ink.font = `400 9px ${monoFamily}`;
+          ink.fillStyle = "rgba(97, 152, 138, 0.53)";
+          ink.fillText(bytes, 86, baseline);
+          const separator = instruction.indexOf(" ");
+          const opcode = separator < 0 ? instruction : instruction.slice(0, separator);
+          const operand = separator < 0 ? "" : instruction.slice(separator).trim();
+          ink.font = `400 14px ${monoFamily}`;
+          ink.fillStyle = "#b4d8c9";
+          ink.fillText(opcode, 224, baseline);
+          ink.fillStyle = "#7da895";
+          ink.fillText(operand, 278, baseline);
+          address += bytes ? bytes.split(" ").length : 0;
+        });
+        blockTextures.set(block.id, texture);
+      });
     }
 
-    function drawBranches() {
-      drawing.font = `400 12px ${monoFamily}`;
-      branches.forEach((branch, index) => {
-        const points = branch.points;
+    function drawAddressField(cameraX: number, cameraY: number) {
+      drawing.save();
+      drawing.translate(cameraX * 0.14, cameraY * 0.12 - 180);
+      drawing.scale(1.08, 0.92);
+      drawing.lineWidth = 0.7;
+      drawing.strokeStyle = "rgba(42, 94, 85, 0.12)";
+      drawing.stroke(grid);
+      drawing.strokeStyle = "rgba(78, 153, 130, 0.28)";
+      drawing.stroke(crosses);
+      drawing.font = `400 10px ${monoFamily}`;
+      for (let rail = 0; rail < 3; rail++) {
+        const x = rail * 950 - 550;
+        drawing.strokeStyle = "rgba(74, 155, 128, 0.17)";
         drawing.beginPath();
-        drawing.moveTo(points[0][0], points[0][1]);
-        points.slice(1).forEach(([x, y]) => drawing.lineTo(x, y));
-        drawing.strokeStyle = index === 5 ? "rgba(108, 231, 214, 0.5)" : "rgba(41, 130, 119, 0.38)";
-        drawing.lineWidth = index === 5 ? 1.4 : 1;
+        drawing.moveTo(x, -900);
+        drawing.lineTo(x, 2100);
         drawing.stroke();
-
-        drawing.setLineDash([8, 150]);
-        drawing.lineDashOffset = frame.reduced ? 0 : -frame.time * 20 - index * 41;
-        drawing.strokeStyle = "rgba(135, 247, 226, 0.68)";
-        drawing.stroke();
-        drawing.setLineDash([]);
-
-        const last = points[points.length - 1];
-        const previous = points[points.length - 2];
-        const direction = Math.atan2(last[1] - previous[1], last[0] - previous[0]);
-        drawing.save();
-        drawing.translate(last[0], last[1]);
-        drawing.rotate(direction);
-        drawing.beginPath();
-        drawing.moveTo(-8, -3);
-        drawing.lineTo(0, 0);
-        drawing.lineTo(-8, 3);
-        drawing.stroke();
-        drawing.restore();
-
-        if (branch.condition) {
-          drawing.fillStyle = "rgba(109, 175, 162, 0.7)";
-          drawing.fillText(branch.condition, points[1][0] + 12, points[1][1] - 10);
+        for (let row = 0; row < 22; row++) {
+          const y = row * 120 - 700;
+          drawing.fillStyle = row % 4 === 0 ? "rgba(83, 163, 139, 0.35)" : "rgba(63, 120, 106, 0.2)";
+          drawing.fillText((0x401000 + row * 0x20 + rail * 0x1000).toString(16).padStart(8, "0"), x + 12, y);
+          drawing.fillRect(x - 4, y - 4, 8, 1);
         }
-      });
+      }
+      drawing.restore();
+    }
+
+    function drawConnection(connection: Connection, index: number, focus: string) {
+      const from = blockById.get(connection.from)!;
+      const to = blockById.get(connection.to)!;
+      const active = from.id === focus || to.id === focus;
+      const loop = from === to;
+      const startX = loop ? from.x : from.x + from.width * 0.7;
+      const startY = from.y + blockHeight(from) - 8;
+      const endX = loop ? to.x : to.x + 20;
+      const endY = loop ? to.y + 78 : to.y;
+      const controlX = loop ? startX - 140 : (startX + endX) / 2 + connection.bend * 220;
+      drawing.beginPath();
+      drawing.moveTo(startX, startY);
+      drawing.bezierCurveTo(controlX, startY + 110, controlX, endY - 110, endX, endY);
+      drawing.lineWidth = active ? 1.4 : 0.8;
+      drawing.strokeStyle = active ? "rgba(55, 187, 164, 0.66)" : "rgba(41, 111, 96, 0.35)";
+      drawing.stroke();
+      drawing.setLineDash([active ? 24 : 8, 280]);
+      drawing.lineDashOffset = frame.reduced ? 0 : -frame.time * (active ? 42 : 20) - index * 53;
+      drawing.strokeStyle = active ? "rgba(173, 255, 228, 0.9)" : "rgba(108, 209, 179, 0.4)";
+      drawing.stroke();
+      drawing.setLineDash([]);
+      drawing.fillStyle = active ? "#9cf5df" : "#316e5e";
+      drawing.fillRect(endX - 2, endY - 2, 4, 4);
+      if (connection.label) {
+        drawing.font = `400 10px ${monoFamily}`;
+        drawing.fillStyle = active ? "#78bfa7" : "#345d50";
+        drawing.fillText(connection.label, controlX + 12, (startY + endY) / 2);
+      }
     }
 
     function drawBlock(block: AssemblyBlock, focus: string) {
+      const texture = blockTextures.get(block.id);
+      if (!texture) return;
       const active = block.id === focus;
-      const blockWidth = block.width;
-      const blockHeightValue = blockHeight(block);
+      const depthX = frame.reduced ? 0 : frame.pointerX * block.depth * 0.13;
+      const depthY = frame.reduced ? 0 : frame.pointerY * block.depth * 0.075;
       drawing.save();
-      drawing.translate(block.x, block.y);
-
-      drawing.fillStyle = "rgba(1, 8, 10, 0.9)";
-      drawing.fillRect(7, 9, blockWidth, blockHeightValue);
-      drawing.strokeStyle = "rgba(22, 67, 62, 0.35)";
-      drawing.strokeRect(7, 9, blockWidth, blockHeightValue);
-
-      drawing.fillStyle = active ? "rgba(6, 25, 27, 0.93)" : "rgba(3, 15, 18, 0.92)";
-      drawing.fillRect(0, 0, blockWidth, blockHeightValue);
-      drawing.strokeStyle = active ? "rgba(82, 218, 200, 0.68)" : "rgba(48, 105, 96, 0.42)";
-      drawing.lineWidth = active ? 1.3 : 1;
-      drawing.strokeRect(0, 0, blockWidth, blockHeightValue);
-
-      drawing.fillStyle = active ? "rgba(31, 104, 95, 0.2)" : "rgba(21, 58, 53, 0.18)";
-      drawing.fillRect(0, 0, blockWidth, 39);
-      drawing.strokeStyle = "rgba(54, 112, 101, 0.3)";
-      drawing.beginPath();
-      drawing.moveTo(0, 39);
-      drawing.lineTo(blockWidth, 39);
-      drawing.stroke();
-
-      drawing.font = `500 15px ${monoFamily}`;
-      drawing.fillStyle = active ? "#99e7db" : "#72a69c";
-      drawing.fillText(`${block.label}:`, 18, 25);
-      drawing.font = `400 10px ${monoFamily}`;
-      drawing.fillStyle = "rgba(100, 154, 143, 0.58)";
-      drawing.textAlign = "right";
-      drawing.fillText(`0x${block.address.toString(16)}`, blockWidth - 15, 25);
-      drawing.textAlign = "left";
-
-      const lineIndex = frame.reduced ? 0 : Math.floor(frame.time / 0.58) % block.instructions.length;
-      block.instructions.forEach((instruction, index) => {
-        const baseline = 67 + index * 28;
-        const current = active && index === lineIndex;
-        if (current) {
-          drawing.fillStyle = "rgba(10, 186, 181, 0.1)";
-          drawing.fillRect(1, baseline - 19, blockWidth - 2, 27);
-          drawing.fillStyle = "#84e7d6";
-          drawing.fillRect(0, baseline - 19, 2, 27);
-        }
-
-        drawing.font = `400 10px ${monoFamily}`;
-        drawing.fillStyle = current ? "#62b3a5" : "rgba(86, 132, 123, 0.5)";
-        drawing.fillText((block.address + index * 3).toString(16).slice(-4), 14, baseline);
-
-        const splitAt = instruction.indexOf(" ");
-        const opcode = splitAt < 0 ? instruction : instruction.slice(0, splitAt);
-        const operand = splitAt < 0 ? "" : instruction.slice(splitAt).trim();
-        drawing.font = `400 14px ${monoFamily}`;
-        drawing.fillStyle = current ? "#caf8eb" : active ? "#a2c9bd" : "#739b90";
-        drawing.fillText(opcode, 58, baseline);
-        drawing.fillStyle = current ? "#8ed5c5" : "#608b80";
-        drawing.fillText(operand, 114, baseline);
-      });
-
+      drawing.translate(block.x + depthX, block.y + depthY);
+      drawing.transform(1, -block.depth * 0.00032, -0.035, 1, 0, 0);
+      drawing.globalAlpha = active ? 1 : 0.66;
+      drawing.drawImage(texture, -10, -10, texture.width / pixelRatio, texture.height / pixelRatio);
+      drawing.globalAlpha = 1;
       if (active) {
-        drawing.strokeStyle = "rgba(156, 245, 230, 0.8)";
-        drawing.shadowColor = "rgba(10, 186, 181, 0.75)";
-        drawing.shadowBlur = 10;
+        const lineIndex = frame.reduced ? 0 : Math.floor(frame.time / 0.58) % block.instructions.length;
+        const baseline = 65 + lineIndex * 33;
+        const light = drawing.createLinearGradient(0, 0, block.width, 0);
+        light.addColorStop(0, "rgba(10, 186, 181, 0.22)");
+        light.addColorStop(1, "rgba(10, 186, 181, 0)");
+        drawing.fillStyle = light;
+        drawing.fillRect(0, baseline - 22, block.width, 32);
+        drawing.fillStyle = "#9cf5e6";
+        drawing.fillRect(0, baseline - 21, 2, 30);
+        drawing.fillStyle = "rgba(156, 245, 230, 0.75)";
         drawing.beginPath();
-        drawing.moveTo(0, 19);
+        drawing.moveTo(-13, baseline - 10);
+        drawing.lineTo(-7, baseline - 6);
+        drawing.lineTo(-13, baseline - 2);
+        drawing.fill();
+        drawing.strokeStyle = "rgba(120, 231, 199, 0.84)";
+        drawing.shadowColor = "rgba(10, 186, 181, 0.6)";
+        drawing.shadowBlur = 8;
+        drawing.beginPath();
+        drawing.moveTo(0, 22);
         drawing.lineTo(0, 0);
-        drawing.lineTo(23, 0);
-        drawing.moveTo(blockWidth - 23, blockHeightValue);
-        drawing.lineTo(blockWidth, blockHeightValue);
-        drawing.lineTo(blockWidth, blockHeightValue - 19);
+        drawing.lineTo(36, 0);
         drawing.stroke();
       }
+      drawing.restore();
+    }
+
+    function drawMemoryRibbon(cameraX: number, cameraY: number) {
+      drawing.save();
+      drawing.translate(580 - cameraX * 0.045, 1445 - cameraY * 0.035);
+      drawing.transform(1, -0.14, 0.3, 0.7, 0, 0);
+      const byteValues = ["7f", "45", "4c", "46", "02", "01", "01", "00", "ad", "bc", "a7", "00", "65", "74", "6f", "00"];
+      drawing.font = `400 19px ${monoFamily}`;
+      const selected = frame.reduced ? 8 : 8 + Math.floor(frame.time / 0.72) % 3;
+      byteValues.forEach((byte, index) => {
+        const x = index * 48;
+        drawing.fillStyle = index === selected ? "rgba(10, 186, 181, 0.16)" : "rgba(3, 16, 18, 0.5)";
+        drawing.fillRect(x, -28, 40, 49);
+        drawing.fillStyle = index === selected ? "#a6f7df" : "#3e7966";
+        drawing.fillText(byte, x + 7, 2);
+        drawing.fillStyle = index === selected ? "#0abab5" : "#183e32";
+        drawing.fillRect(x, 20, 40, 1);
+      });
+      drawing.font = `400 10px ${monoFamily}`;
+      drawing.fillStyle = "#32624f";
+      drawing.fillText(".data  0x00404020", 0, -47);
       drawing.restore();
     }
 
@@ -210,8 +261,8 @@ export default function AssemblyBackdrop() {
       if (disposed || !width || !height) return;
       const scene = frame.reduced ? 0 : clamp(frame.scene, 0, cameras.length - 1);
       const cameraIndex = Math.floor(scene);
-      const next = cameras[Math.min(cameraIndex + 1, cameras.length - 1)];
       const current = cameras[cameraIndex];
+      const next = cameras[Math.min(cameraIndex + 1, cameras.length - 1)];
       const fraction = scene - cameraIndex;
       const blend = fraction * fraction * (3 - 2 * fraction);
       const cameraX = current.x + (next.x - current.x) * blend;
@@ -220,38 +271,36 @@ export default function AssemblyBackdrop() {
       const angle = current.angle + (next.angle - current.angle) * blend;
       const focus = blend < 0.5 ? current.focus : next.focus;
       const mobile = width < 760;
-      const scale = (mobile ? 0.72 : clamp(width / 1600, 0.76, 1.2)) * zoom;
-      const pointerX = frame.reduced ? 0 : frame.pointerX * 13;
-      const pointerY = frame.reduced ? 0 : frame.pointerY * 9;
-
+      const scale = (mobile ? 0.62 : clamp(width / 1600, 0.72, 1.16)) * zoom;
+      const pointerX = frame.reduced ? 0 : frame.pointerX * 16;
+      const pointerY = frame.reduced ? 0 : frame.pointerY * 10;
       drawing.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       drawing.fillStyle = "#020708";
       drawing.fillRect(0, 0, width, height);
       drawing.save();
-      drawing.translate(width * (mobile ? 0.68 : 0.73) + pointerX, height * (mobile ? 0.67 : 0.53) + pointerY);
+      drawing.translate(width * (mobile ? 0.68 : 0.72) + pointerX, height * (mobile ? 0.63 : 0.5) + pointerY);
       drawing.rotate(angle);
-      drawing.transform(1, -0.03, -0.085, 1, 0, 0);
+      drawing.transform(1, -0.065, -0.12, 1, 0, 0);
       drawing.scale(scale, scale);
       drawing.translate(-cameraX, -cameraY);
-      drawGrid();
-      drawBranches();
+      drawAddressField(cameraX, cameraY);
+      drawMemoryRibbon(cameraX, cameraY);
+      connections.forEach((connection, index) => drawConnection(connection, index, focus));
       assemblyBlocks.forEach((block) => drawBlock(block, focus));
       drawing.restore();
-
-      const horizontalShade = drawing.createLinearGradient(0, 0, width, 0);
-      horizontalShade.addColorStop(0, "rgba(2, 7, 8, 0.82)");
-      horizontalShade.addColorStop(mobile ? 0.45 : 0.32, "rgba(2, 7, 8, 0.52)");
-      horizontalShade.addColorStop(0.75, "rgba(2, 7, 8, 0.08)");
-      horizontalShade.addColorStop(1, "rgba(2, 7, 8, 0.28)");
-      drawing.fillStyle = horizontalShade;
+      const shade = drawing.createLinearGradient(0, 0, width, 0);
+      shade.addColorStop(0, "rgba(2, 7, 8, 0.84)");
+      shade.addColorStop(mobile ? 0.4 : 0.32, "rgba(2, 7, 8, 0.55)");
+      shade.addColorStop(0.7, "rgba(2, 7, 8, 0.03)");
+      shade.addColorStop(1, "rgba(2, 7, 8, 0.18)");
+      drawing.fillStyle = shade;
       drawing.fillRect(0, 0, width, height);
-
-      const edgeShade = drawing.createLinearGradient(0, 0, 0, height);
-      edgeShade.addColorStop(0, "rgba(2, 7, 8, 0.45)");
-      edgeShade.addColorStop(0.25, "rgba(2, 7, 8, 0)");
-      edgeShade.addColorStop(0.8, "rgba(2, 7, 8, 0)");
-      edgeShade.addColorStop(1, "rgba(2, 7, 8, 0.68)");
-      drawing.fillStyle = edgeShade;
+      const edge = drawing.createLinearGradient(0, 0, 0, height);
+      edge.addColorStop(0, "rgba(2, 7, 8, 0.6)");
+      edge.addColorStop(0.24, "rgba(2, 7, 8, 0)");
+      edge.addColorStop(0.78, "rgba(2, 7, 8, 0)");
+      edge.addColorStop(1, "rgba(2, 7, 8, 0.64)");
+      drawing.fillStyle = edge;
       drawing.fillRect(0, 0, width, height);
     }
 
@@ -259,10 +308,11 @@ export default function AssemblyBackdrop() {
       const bounds = host!.getBoundingClientRect();
       width = Math.round(bounds.width || window.innerWidth);
       height = Math.round(bounds.height || window.innerHeight);
-      pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+      pixelRatio = Math.min(window.devicePixelRatio || 1, width < 760 ? 1.25 : 1.5);
       canvas!.width = Math.round(width * pixelRatio);
       canvas!.height = Math.round(height * pixelRatio);
       monoFamily = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace";
+      makeBlockTextures();
       draw();
       host!.dataset.ready = "true";
     }
@@ -272,18 +322,16 @@ export default function AssemblyBackdrop() {
       draw();
     }
 
-    const resizeObserver = new ResizeObserver(resize);
-    resizeObserver.observe(host);
-    window.addEventListener("eto:motion-frame", onFrame);
+    const observer = new ResizeObserver(resize);
+    observer.observe(host);
+    addEventListener("eto:motion-frame", onFrame);
     resize();
-    document.fonts.ready.then(() => {
-      if (!disposed) resize();
-    });
-
+    document.fonts.ready.then(() => { if (!disposed) resize(); });
     return () => {
       disposed = true;
-      resizeObserver.disconnect();
-      window.removeEventListener("eto:motion-frame", onFrame);
+      observer.disconnect();
+      removeEventListener("eto:motion-frame", onFrame);
+      blockTextures.clear();
     };
   }, []);
 
