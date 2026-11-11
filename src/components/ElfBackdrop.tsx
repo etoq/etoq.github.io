@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { ELF_FRAME_EVENT, elfInstructions, type ElfFrame } from "@/lib/elf";
+import { createAssemblyWorld } from "@/lib/assembly-world";
 
 type Point = readonly [number, number, number];
 type ScreenPoint = { x: number; y: number; z: number };
@@ -64,6 +65,7 @@ export default function ElfBackdrop() {
     const surface = canvas;
     const element = host;
     const textures: HTMLCanvasElement[] = [];
+    const assemblyWorld = createAssemblyWorld();
     const locale = document.documentElement.lang;
     const channelNames = locale === "ru" ? ["GitHub", "Почта", "Telegram"] : ["GitHub", "Email", "Telegram"];
 
@@ -154,7 +156,7 @@ export default function ElfBackdrop() {
       }
     }
 
-    function camera(): Camera {
+    function camera(world: ReturnType<typeof assemblyWorld.draw>): Camera {
       const mobile = width < 760;
       const regionTop = headerBottom + (mobile ? 14 : 24);
       const regionBottom = mobile ? copyTop - 18 : height - footerHeight - 40;
@@ -164,13 +166,14 @@ export default function ElfBackdrop() {
       const scale = Math.min(horizontalScale, availableHeight / verticalExtent, mobile ? 52 : 104);
       const preferredCenter = mobile ? Math.min(258, Math.max(205, height * 0.34)) : height * 0.46;
       const halfExtent = scale * verticalExtent / 2;
+      const arrival = smooth((world.arrival - 0.1) / 0.9);
       return {
-        yaw: interpolate([-0.4, -0.63, 0.28, -0.22], frame.phase) + frame.pointerX * 0.085,
-        pitch: interpolate([-0.29, -0.43, -0.15, -0.2], frame.phase) + frame.pointerY * 0.055,
+        yaw: interpolate([-0.4, -0.63, 0.28, -0.22], frame.phase) + frame.pointerX * 0.085 + (1 - arrival) * 0.2,
+        pitch: interpolate([-0.29, -0.43, -0.15, -0.2], frame.phase) + frame.pointerY * 0.055 - (1 - arrival) * 0.12,
         separation: interpolate([0.33, 1.35, 0.25, 0.45], frame.phase),
-        cx: width * (mobile ? 0.5 : 0.67),
-        cy: clamp(preferredCenter, regionTop + halfExtent, regionBottom - halfExtent),
-        scale,
+        cx: mix(world.focusX, width * (mobile ? 0.5 : 0.67), arrival),
+        cy: mix(world.focusY, clamp(preferredCenter, regionTop + halfExtent, regionBottom - halfExtent), arrival),
+        scale: scale * (0.14 + 0.86 * arrival),
       };
     }
 
@@ -230,7 +233,7 @@ export default function ElfBackdrop() {
         return { index, name, z, offset, depth: project([0, 0, z], view).z };
       }).sort((first, second) => second.depth - first.depth);
       drawing.save();
-      drawing.globalAlpha = opacity;
+      drawing.globalAlpha *= opacity;
       for (const plane of planes) {
         const x = plane.offset;
         const corners: Point[] = [[-3 + x, -1.66, plane.z], [3 + x, -1.66, plane.z], [3 + x, 1.66, plane.z], [-3 + x, 1.66, plane.z]];
@@ -299,7 +302,7 @@ export default function ElfBackdrop() {
 
     function drawMaterialLabel(view: Camera, opacity: number) {
       drawing.save();
-      drawing.globalAlpha = opacity;
+      drawing.globalAlpha *= opacity;
       const index = selection[1];
       const z = planeZ(index + 1, view);
       const end: Point = [3.4, 0.7 - index * 0.6, z];
@@ -324,7 +327,7 @@ export default function ElfBackdrop() {
       const visibleBottom = Math.min(height - 30, copyWindow?.bottom ?? height);
       if (bounds.top < visibleTop || bounds.top > visibleBottom - 20) return;
       drawing.save();
-      drawing.globalAlpha = opacity;
+      drawing.globalAlpha *= opacity;
       const selected = selection[0];
       const source = project([-2.5 + selected * 1.9, 0.05, planeZ(2, view)], view);
       const mobile = width < 760;
@@ -357,7 +360,7 @@ export default function ElfBackdrop() {
 
     function drawTrace(view: Camera, opacity: number) {
       drawing.save();
-      drawing.globalAlpha = opacity;
+      drawing.globalAlpha *= opacity;
       const z = planeZ(1, view) - 0.025;
       const rail = -3.22;
       const selected = selection[2];
@@ -396,7 +399,7 @@ export default function ElfBackdrop() {
 
     function drawSymbols(view: Camera, opacity: number) {
       drawing.save();
-      drawing.globalAlpha = opacity;
+      drawing.globalAlpha *= opacity;
       const selected = selection[3];
       const symbolZ = -0.8;
       polygon([[-3, -1.6, symbolZ], [0.1, -1.6, symbolZ], [0.1, 1.8, symbolZ], [-3, 1.8, symbolZ]], view, "#061714f5", "#387d6e");
@@ -447,25 +450,25 @@ export default function ElfBackdrop() {
       drawing.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       drawing.fillStyle = "#020708";
       drawing.fillRect(0, 0, width, height);
-      const view = camera();
+      const world = assemblyWorld.draw(drawing, width, height, frame);
+      const view = camera(world);
+      const fraction = frame.phase - Math.floor(frame.phase);
+      const reveal = fraction < 0.5 ? 1 : smooth((fraction - 0.72) / 0.28);
+      const objectVisibility = smooth((world.arrival - 0.28) / 0.72) * reveal;
       const glow = drawing.createRadialGradient(view.cx, view.cy, 0, view.cx, view.cy, width * 0.58);
       glow.addColorStop(0, "#0abab514");
       glow.addColorStop(1, "#0abab500");
       drawing.fillStyle = glow;
       drawing.fillRect(0, 0, width, height);
-      drawing.save();
-      drawing.globalAlpha = 0.4;
-      for (let index = -5; index <= 5; index++) {
-        path([[-5, index * 0.7, -2], [5, index * 0.7, -2]], view, "#1b3f34", 0.6);
-        path([[index, -3.5, -2], [index, 3.5, -2]], view, "#1b3f34", 0.6);
-      }
-      drawing.restore();
       const traceOpacity = smooth(1 - Math.abs(frame.phase - 2));
       const symbolOpacity = smooth(1 - Math.abs(frame.phase - 3));
+      drawing.save();
+      drawing.globalAlpha = objectVisibility;
       drawPlanes(view, 1 - symbolOpacity * 0.82);
       if (frame.phase > 0 && frame.phase < 2) drawMaterialLabel(view, smooth(1 - Math.abs(frame.phase - 1)));
       if (traceOpacity > 0) drawTrace(view, traceOpacity);
       if (symbolOpacity > 0) drawSymbols(view, symbolOpacity);
+      drawing.restore();
       if (width >= 760) {
         const shade = drawing.createLinearGradient(0, 0, width, 0);
         shade.addColorStop(0, "#020708eb");
@@ -474,7 +477,19 @@ export default function ElfBackdrop() {
         drawing.fillStyle = shade;
         drawing.fillRect(0, 0, width, height);
       }
-      if (frame.phase < 0.75) drawExtraction(view, 1 - smooth((frame.phase - 0.35) / 0.4));
+      if (width < 760) {
+        const shade = drawing.createLinearGradient(0, copyTop - 45, 0, copyTop + 40);
+        shade.addColorStop(0, "#02070800");
+        shade.addColorStop(1, "#020708f0");
+        drawing.fillStyle = shade;
+        drawing.fillRect(0, copyTop - 45, width, height - copyTop + 45);
+      }
+      if (frame.phase < 0.75) drawExtraction(view, (1 - smooth((frame.phase - 0.35) / 0.4)) * objectVisibility);
+      element.dataset.worldArrival = world.arrival.toFixed(4);
+      element.dataset.worldZoom = world.cameraZoom.toFixed(4);
+      element.dataset.objectScale = view.scale.toFixed(3);
+      element.dataset.focusX = world.focusX.toFixed(3);
+      element.dataset.focusY = world.focusY.toFixed(3);
     }
 
     function updateFrame(event: Event) {
@@ -515,6 +530,7 @@ export default function ElfBackdrop() {
       surface.width = Math.round(width * pixelRatio);
       surface.height = Math.round(height * pixelRatio);
       mono = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace";
+      assemblyWorld.rebuild(mono, pixelRatio);
       createTextures();
       draw();
       element.dataset.ready = "true";
@@ -536,6 +552,7 @@ export default function ElfBackdrop() {
       removeEventListener(ELF_FRAME_EVENT, updateFrame);
       removeEventListener("visibilitychange", scheduleResize);
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+      assemblyWorld.dispose();
       textures.length = 0;
     };
   }, []);
