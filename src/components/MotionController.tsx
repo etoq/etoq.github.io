@@ -2,23 +2,13 @@
 
 import { useEffect } from "react";
 import { config } from "@/lib/config";
+import { SCENE_SYMBOLS, type AssemblyFrame } from "@/lib/assembly";
 
-type StyledElement = HTMLElement | SVGElement;
-
-type PointerSurface = {
-  element: HTMLElement;
-  x: number;
-  y: number;
-  targetX: number;
-  targetY: number;
-};
-
-const INSTRUCTIONS = [0, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 5];
-const ENCODED_BYTES = [0xad, 0xbc, 0xa7];
-const DECODED_BYTES = ENCODED_BYTES.map((byte) => byte ^ 0xc8);
-const SCENE_DURATION = config.motion.duration;
+const STEPS = [0, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 5];
+const ENCODED = [0xad, 0xbc, 0xa7];
+const INTRO = 0.35;
 const STEP_DURATION = 0.29;
-const INTRO_DURATION = 0.35;
+const LOOP_DURATION = config.motion.duration + 2;
 
 function clamp(value: number, minimum = 0, maximum = 1) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -28,131 +18,133 @@ export default function MotionController() {
   useEffect(() => {
     const rootElement = document.getElementById("portfolio");
     if (!rootElement) return;
-    const heroElement = rootElement.querySelector<HTMLElement>("[data-hero]");
-    if (!heroElement) return;
     const root = rootElement;
-    const hero = heroElement;
-    const playbackSurface = hero.querySelector<HTMLElement>(".listing") ?? hero;
-
-    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const pointerQuery = window.matchMedia("(hover: hover) and (pointer: fine)");
-    const instructionElements = Array.from(root.querySelectorAll<HTMLElement>("[data-instruction]"));
-    const byteElements = Array.from(root.querySelectorAll<HTMLElement>("[data-byte]"));
-    const counter = root.querySelector<HTMLElement>("[data-ecx]");
+    const scenes = Array.from(root.querySelectorAll<HTMLElement>("[data-scene]"));
+    const panels = scenes.map((scene) => scene.querySelector<HTMLElement>(".scene-panel")!);
+    const hero = scenes[0];
+    if (!hero) return;
+    const instructions = Array.from(root.querySelectorAll<HTMLElement>("[data-instruction]"));
+    const bytes = Array.from(root.querySelectorAll<HTMLElement>("[data-byte]"));
     const decodedName = root.querySelector<HTMLElement>("[data-decoded-name]");
-    const revealElements = Array.from(root.querySelectorAll<StyledElement>("[data-reveal]"));
-    const analysisScenes = Array.from(root.querySelectorAll<HTMLElement>("[data-analysis-scene]"));
-    const sections = Array.from(root.querySelectorAll<HTMLElement>("[data-observe-section]"));
-    const sectionLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-section-link]"));
+    const counter = root.querySelector<HTMLElement>("[data-ecx]");
+    const consoleCommand = root.querySelector<HTMLElement>("[data-console-command]");
+    const command = consoleCommand?.dataset.command ?? "";
+    const consoleRows = Array.from(root.querySelectorAll<HTMLElement>("[data-console-row]"));
+    const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-section-link]"));
     const languageLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-language-link]"));
-    const pointerSurfaces: PointerSurface[] = [hero, ...analysisScenes].map((element) => ({
-      element, x: 0, y: 0, targetX: 0, targetY: 0,
-    }));
-    const styleCache = new WeakMap<StyledElement, Map<string, string>>();
+    const addressLabel = root.querySelector<HTMLElement>("[data-hud-address]");
+    const symbolLabel = root.querySelector<HTMLElement>("[data-hud-symbol]");
+    const sectionLabel = root.querySelector<HTMLElement>("[data-hud-section]");
+    const progressLabel = root.querySelector<HTMLElement>("[data-hud-progress]");
+    const motionQuery = matchMedia("(prefers-reduced-motion: reduce)");
+    const pointerQuery = matchMedia("(hover: hover) and (pointer: fine)");
+    const styleCache = new WeakMap<HTMLElement, Map<string, string>>();
 
     let reduced = motionQuery.matches;
-    let heroTime = reduced ? SCENE_DURATION : 0;
-    let activeSection = "";
     let frameId: number | null = null;
-    let previousTimestamp: number | null = null;
+    let previousTime: number | null = null;
+    let lastCanvasPaint = -Infinity;
+    let elapsed = 0;
+    let loopTime = 0;
+    let loopCount = 0;
     let previousStep = -2;
     let scrollDirty = true;
-    let targetScroll = window.scrollY;
-    let renderedScroll = targetScroll;
+    let targetScroll = scrollY;
+    let renderedScroll = scrollY;
+    let scenePosition = 0;
+    let progress = 0;
+    let pointerX = 0;
+    let pointerY = 0;
+    let pointerTargetX = 0;
+    let pointerTargetY = 0;
+    let heroVisible = true;
+    let activeSection = "top";
     let disposed = false;
-    let sceneVisible = playbackSurface.getBoundingClientRect().bottom > 0 &&
-      playbackSurface.getBoundingClientRect().top < window.innerHeight;
 
-    function setStyle(element: StyledElement, property: string, value: string) {
-      let properties = styleCache.get(element);
-      if (!properties) {
-        properties = new Map();
-        styleCache.set(element, properties);
+    function setStyle(element: HTMLElement, name: string, value: string) {
+      let cache = styleCache.get(element);
+      if (!cache) {
+        cache = new Map();
+        styleCache.set(element, cache);
       }
-      if (properties.get(property) === value) return;
-      properties.set(property, value);
-      element.style.setProperty(property, value);
+      if (cache.get(name) === value) return;
+      cache.set(name, value);
+      element.style.setProperty(name, value);
     }
 
-    function renderTimeline(time: number) {
-      root.dataset.sceneComplete = String(time >= SCENE_DURATION);
-      const step = time >= SCENE_DURATION
-        ? INSTRUCTIONS.length - 1
-        : clamp(Math.floor((time - INTRO_DURATION) / STEP_DURATION), -1, INSTRUCTIONS.length - 1);
+    function renderLoop() {
+      const time = reduced ? config.motion.duration : Math.min(loopTime, config.motion.duration);
+      const step = clamp(Math.floor((time - INTRO) / STEP_DURATION), -1, STEPS.length - 1);
+      root.dataset.sceneComplete = String(time >= config.motion.duration);
+      root.dataset.loopCount = String(loopCount);
+      setStyle(root, "--sweep", `${(-220 + time / config.motion.duration * 1320).toFixed(1)}px`);
       if (step === previousStep) return;
       previousStep = step;
-
-      const instruction = step < 0 ? -1 : INSTRUCTIONS[step];
+      const instruction = step < 0 ? -1 : STEPS[step];
       const decodedCount = clamp(Math.floor((step + 3) / 4), 0, 3);
       const remaining = 3 - clamp(Math.floor((step + 1) / 4), 0, 3);
-      const currentByte = step >= 1 && step < 13 ? Math.floor((step - 1) / 4) : -1;
-
-      instructionElements.forEach((element) => {
+      instructions.forEach((element) => {
         element.classList.toggle("is-current", Number(element.dataset.instruction) === instruction);
       });
-      byteElements.forEach((element) => {
-        const index = Number(element.dataset.byte);
+      bytes.forEach((element, index) => {
         const done = index < decodedCount;
-        const byte = done ? DECODED_BYTES[index] : ENCODED_BYTES[index];
-        element.textContent = byte.toString(16).padStart(2, "0");
+        element.textContent = (done ? ENCODED[index] ^ 0xc8 : ENCODED[index]).toString(16).padStart(2, "0");
         element.dataset.done = String(done);
-        element.dataset.current = String(index === currentByte);
+        element.dataset.current = String(step >= 1 && step < 13 && index === Math.floor((step - 1) / 4));
       });
-      if (counter) counter.textContent = String(remaining);
       if (decodedName) decodedName.textContent = "eto".slice(0, decodedCount).padEnd(3, "·");
+      if (counter) counter.textContent = String(remaining);
     }
 
     function renderScroll() {
       scrollDirty = false;
-      const viewportHeight = window.innerHeight;
-      const scrollOffset = window.scrollY - renderedScroll;
-      const totalScroll = document.documentElement.scrollHeight - viewportHeight;
-      const progress = totalScroll > 0 ? clamp(window.scrollY / totalScroll) : 0;
-      const heroBounds = hero.getBoundingClientRect();
-      const heroProgress = clamp(-(heroBounds.top + scrollOffset) / Math.max(heroBounds.height * 0.9, 1));
-
-      setStyle(root, "--scroll-progress", progress.toFixed(4));
-      setStyle(root, "--hero-progress", reduced ? "0" : heroProgress.toFixed(4));
-
-      revealElements.forEach((element) => {
-        const bounds = element.getBoundingClientRect();
-        const top = bounds.top + scrollOffset;
-        const reveal = clamp((viewportHeight - top) / (viewportHeight + bounds.height * 0.35));
-        const travel = clamp((top + bounds.height * 0.5 - viewportHeight * 0.5) /
-          (viewportHeight * 0.5 + bounds.height * 0.5), -1, 1);
-        setStyle(element, "--reveal", reduced ? "1" : reveal.toFixed(4));
-        setStyle(element, "--section-travel", reduced ? "0" : travel.toFixed(4));
-      });
-
-      analysisScenes.forEach((scene) => {
-        const bounds = scene.getBoundingClientRect();
-        const top = bounds.top + scrollOffset;
-        const sceneProgress = clamp((viewportHeight * 0.85 - top) /
-          (viewportHeight * 0.5 + bounds.height * 0.35));
-        const travel = clamp((top + bounds.height * 0.5 - viewportHeight * 0.5) /
-          (viewportHeight * 0.5 + bounds.height * 0.5), -1, 1);
-        setStyle(scene, "--analysis-progress", reduced ? "1" : sceneProgress.toFixed(4));
-        setStyle(scene, "--analysis-travel", reduced ? "0" : travel.toFixed(4));
-      });
-
-      let nextSection = "";
-      sections.forEach((section) => {
-        if (section.getBoundingClientRect().top <= viewportHeight * 0.42) nextSection = section.id;
+      const viewport = innerHeight;
+      const maximumScroll = document.documentElement.scrollHeight - viewport;
+      progress = maximumScroll > 0 ? clamp(scrollY / maximumScroll) : 0;
+      setStyle(root, "--scroll-progress", progress.toFixed(5));
+      setStyle(root, "--hero-progress", reduced ? "0" : clamp(renderedScroll / viewport).toFixed(4));
+      if (progressLabel) progressLabel.textContent = `${Math.round(progress * 100)}%`;
+      scenePosition = 0;
+      let nextSection = "top";
+      scenes.forEach((scene, index) => {
+        const start = scene.offsetTop;
+        const end = scenes[index + 1]?.offsetTop ?? start + scene.offsetHeight;
+        if (renderedScroll >= start) scenePosition = Math.min(5, index + clamp((renderedScroll - start) / Math.max(1, end - start)));
+        if (start <= scrollY + viewport * 0.35) nextSection = scene.id;
+        const bounds = panels[index].getBoundingClientRect();
+        const enter = clamp((viewport * 0.94 - bounds.top) / (viewport * 0.4));
+        const exit = clamp((bounds.bottom - viewport * 0.08) / (viewport * 0.42));
+        const reveal = clamp((scrollY - start + viewport * 0.65) / Math.max(viewport * 0.65, scene.offsetHeight - viewport * 0.35));
+        setStyle(scene, "--scene-opacity", reduced ? "1" : Math.min(enter, exit).toFixed(4));
+        setStyle(scene, "--scene-lift", reduced ? "0px" : `${((1 - enter) * 45 - (1 - exit) * 28).toFixed(2)}px`);
+        setStyle(scene, "--scene-reveal", reduced ? "1" : reveal.toFixed(4));
       });
       if (nextSection !== activeSection) {
         activeSection = nextSection;
         root.dataset.activeSection = activeSection;
-        sectionLinks.forEach((link) => {
+        navLinks.forEach((link) => {
           if (link.hash === `#${activeSection}`) link.setAttribute("aria-current", "location");
           else link.removeAttribute("aria-current");
         });
       }
+      if (sectionLabel) sectionLabel.textContent = navLinks.find((link) => link.hash === `#${activeSection}`)?.textContent ?? "eto";
+      const symbol = SCENE_SYMBOLS[Math.round(scenePosition)];
+      if (addressLabel) addressLabel.textContent = symbol.address;
+      if (symbolLabel) symbolLabel.textContent = symbol.label;
+
+      const learning = scenes[2];
+      const consoleProgress = reduced ? 1 : clamp((scrollY - learning.offsetTop + viewport * 0.65) / Math.max(1, learning.offsetHeight - viewport * 0.35));
+      if (consoleCommand) consoleCommand.textContent = command.slice(0, Math.floor(clamp(consoleProgress * 4) * command.length));
+      consoleRows.forEach((row, index) => {
+        const reveal = reduced ? 1 : clamp((consoleProgress - 0.16 - index * 0.19) / 0.22);
+        setStyle(row, "--row-reveal", reveal.toFixed(4));
+        row.dataset.current = String(reveal > 0 && reveal < 1);
+      });
     }
 
-    function stopFrame() {
-      if (frameId !== null) cancelAnimationFrame(frameId);
-      frameId = null;
-      previousTimestamp = null;
+    function paintCanvas() {
+      const detail: AssemblyFrame = { scene: scenePosition, progress, time: elapsed, pointerX, pointerY, reduced };
+      dispatchEvent(new CustomEvent<AssemblyFrame>("eto:motion-frame", { detail }));
     }
 
     function requestFrame() {
@@ -160,143 +152,118 @@ export default function MotionController() {
       frameId = requestAnimationFrame(update);
     }
 
+    function stopFrame() {
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      frameId = null;
+      previousTime = null;
+    }
+
     function update(timestamp: number) {
       frameId = null;
-      if (disposed || document.hidden) {
-        previousTimestamp = null;
-        return;
+      if (disposed || document.hidden) return;
+      const elapsedDelta = previousTime === null ? 0 : Math.max(0, (timestamp - previousTime) / 1000);
+      const delta = Math.min(elapsedDelta || 1 / 60, 0.1);
+      previousTime = timestamp;
+      const damping = reduced ? 1 : 1 - Math.exp(-delta * 11);
+      const difference = targetScroll - renderedScroll;
+      renderedScroll = Math.abs(difference) > 0.1 ? renderedScroll + difference * damping : targetScroll;
+      const moving = Math.abs(difference) > 0.1;
+      pointerX += (pointerTargetX - pointerX) * damping;
+      pointerY += (pointerTargetY - pointerY) * damping;
+      if (reduced) pointerX = pointerY = 0;
+      setStyle(root, "--pointer-x", pointerX.toFixed(4));
+      setStyle(root, "--pointer-y", pointerY.toFixed(4));
+      if (scrollDirty || moving) renderScroll();
+      if (!reduced) {
+        elapsed += elapsedDelta;
+        if (heroVisible) {
+          loopTime += elapsedDelta;
+          if (loopTime >= LOOP_DURATION) {
+            loopCount += Math.floor(loopTime / LOOP_DURATION);
+            loopTime %= LOOP_DURATION;
+          }
+          renderLoop();
+        }
       }
-      const delta = previousTimestamp === null ? 1 / 60 : Math.min((timestamp - previousTimestamp) / 1000, 0.1);
-      previousTimestamp = timestamp;
-      const damping = reduced ? 1 : 1 - Math.exp(-delta * 14);
-      const scrollDifference = targetScroll - renderedScroll;
-      const scrollMoving = Math.abs(scrollDifference) > 0.1;
-      renderedScroll = scrollMoving ? renderedScroll + scrollDifference * damping : targetScroll;
-      if (scrollDirty || scrollDifference !== 0) renderScroll();
-
-      let pointerMoving = false;
-      pointerSurfaces.forEach((surface) => {
-        const differenceX = surface.targetX - surface.x;
-        const differenceY = surface.targetY - surface.y;
-        const moving = Math.abs(differenceX) + Math.abs(differenceY) > 0.001;
-        surface.x = moving ? surface.x + differenceX * damping : surface.targetX;
-        surface.y = moving ? surface.y + differenceY * damping : surface.targetY;
-        setStyle(surface.element, "--pointer-x", surface.x.toFixed(4));
-        setStyle(surface.element, "--pointer-y", surface.y.toFixed(4));
-        pointerMoving ||= moving;
-      });
-
-      const timelineActive = !reduced && sceneVisible && heroTime < SCENE_DURATION;
-      if (timelineActive) {
-        heroTime = Math.min(SCENE_DURATION, heroTime + delta);
-        renderTimeline(heroTime);
-        const sweep = -220 + heroTime / SCENE_DURATION * 1320;
-        setStyle(root, "--sweep", `${sweep.toFixed(1)}px`);
+      if (reduced || timestamp - lastCanvasPaint >= 32) {
+        paintCanvas();
+        lastCanvasPaint = timestamp;
       }
-      if (timelineActive || scrollMoving || pointerMoving) requestFrame();
-      else previousTimestamp = null;
+      if (!reduced || moving) requestFrame();
+      else previousTime = null;
     }
 
     function onScroll() {
-      targetScroll = window.scrollY;
+      targetScroll = scrollY;
       scrollDirty = true;
       requestFrame();
     }
 
-    function onVisibilityChange() {
-      if (document.hidden) stopFrame();
-      else onScroll();
-    }
-
     function onPointerMove(event: PointerEvent) {
       if (reduced || !pointerQuery.matches) return;
-      const surface = pointerSurfaces.find((item) => item.element === event.currentTarget);
-      if (!surface) return;
-      const bounds = surface.element.getBoundingClientRect();
-      surface.targetX = clamp((event.clientX - bounds.left) / bounds.width * 2 - 1, -1, 1);
-      surface.targetY = clamp((event.clientY - bounds.top) / bounds.height * 2 - 1, -1, 1);
+      pointerTargetX = clamp(event.clientX / innerWidth * 2 - 1, -1, 1);
+      pointerTargetY = clamp(event.clientY / innerHeight * 2 - 1, -1, 1);
       requestFrame();
     }
 
-    function onPointerLeave(event: PointerEvent) {
-      const surface = pointerSurfaces.find((item) => item.element === event.currentTarget);
-      if (!surface) return;
-      surface.targetX = 0;
-      surface.targetY = 0;
+    function resetPointer() {
+      pointerTargetX = pointerTargetY = 0;
       requestFrame();
     }
 
-    function resetPointers() {
-      pointerSurfaces.forEach((surface) => {
-        surface.targetX = 0;
-        surface.targetY = 0;
-      });
-      requestFrame();
-    }
-
-    function onReducedMotionChange(event: MediaQueryListEvent) {
+    function onReducedMotion(event: MediaQueryListEvent) {
       reduced = event.matches;
       root.dataset.reducedMotion = String(reduced);
-      renderedScroll = targetScroll = window.scrollY;
-      if (reduced) {
-        heroTime = SCENE_DURATION;
-        renderTimeline(SCENE_DURATION);
-        setStyle(root, "--sweep", "1100px");
-      }
-      resetPointers();
+      previousStep = -2;
+      renderedScroll = targetScroll = scrollY;
+      resetPointer();
+      renderLoop();
       onScroll();
+    }
+
+    function onVisibility() {
+      if (document.hidden) stopFrame();
+      else onScroll();
     }
 
     function preserveLanguageAnchor(event: MouseEvent) {
       const link = event.currentTarget as HTMLAnchorElement;
       const destination = link.getAttribute("href")?.split("#")[0];
-      if (!destination) return;
-      const hash = window.location.hash || (activeSection ? `#${activeSection}` : "");
-      link.setAttribute("href", `${destination}${hash}`);
+      if (destination) link.setAttribute("href", `${destination}${location.hash || `#${activeSection}`}`);
     }
 
-    const visibilityObserver = new IntersectionObserver((entries) => {
-      sceneVisible = entries[0].isIntersecting;
-      requestFrame();
-    });
-    visibilityObserver.observe(playbackSurface);
+    const observer = new IntersectionObserver(([entry]) => { heroVisible = entry.isIntersecting; });
+    observer.observe(hero);
     const resizeObserver = new ResizeObserver(onScroll);
     resizeObserver.observe(root);
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll, { passive: true });
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    motionQuery.addEventListener("change", onReducedMotionChange);
-    pointerQuery.addEventListener("change", resetPointers);
-    pointerSurfaces.forEach(({ element }) => {
-      element.addEventListener("pointermove", onPointerMove, { passive: true });
-      element.addEventListener("pointerleave", onPointerLeave);
-    });
+    addEventListener("scroll", onScroll, { passive: true });
+    addEventListener("resize", onScroll, { passive: true });
+    addEventListener("pointermove", onPointerMove, { passive: true });
+    document.addEventListener("pointerleave", resetPointer);
+    document.addEventListener("visibilitychange", onVisibility);
+    motionQuery.addEventListener("change", onReducedMotion);
+    pointerQuery.addEventListener("change", resetPointer);
     languageLinks.forEach((link) => link.addEventListener("click", preserveLanguageAnchor));
-
     root.dataset.motionReady = "true";
     root.dataset.reducedMotion = String(reduced);
-    renderTimeline(heroTime);
-    setStyle(root, "--sweep", reduced ? "1100px" : "-220px");
+    renderLoop();
     renderScroll();
+    paintCanvas();
     requestFrame();
-    document.fonts.ready.then(() => {
-      if (!disposed) onScroll();
-    });
+    document.fonts.ready.then(() => { if (!disposed) onScroll(); });
 
     return () => {
       disposed = true;
       stopFrame();
-      visibilityObserver.disconnect();
+      observer.disconnect();
       resizeObserver.disconnect();
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      motionQuery.removeEventListener("change", onReducedMotionChange);
-      pointerQuery.removeEventListener("change", resetPointers);
-      pointerSurfaces.forEach(({ element }) => {
-        element.removeEventListener("pointermove", onPointerMove);
-        element.removeEventListener("pointerleave", onPointerLeave);
-      });
+      removeEventListener("scroll", onScroll);
+      removeEventListener("resize", onScroll);
+      removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerleave", resetPointer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      motionQuery.removeEventListener("change", onReducedMotion);
+      pointerQuery.removeEventListener("change", resetPointer);
       languageLinks.forEach((link) => link.removeEventListener("click", preserveLanguageAnchor));
       delete root.dataset.motionReady;
     };
