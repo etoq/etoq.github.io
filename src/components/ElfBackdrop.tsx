@@ -15,6 +15,7 @@ type Camera = {
   scale: number;
 };
 type FocusTransition = { from: number[]; to: number[]; startedAt: number };
+type HitTarget = { x: number; y: number; width: number; height: number; point: ScreenPoint };
 
 const planeNames = ["ELF header", ".text", ".rodata", ".data"];
 const materialNames = ["analyze.py", "notes.md", "rule.yar"];
@@ -52,9 +53,22 @@ function instructionY(row: number) {
   return -1.66 + (111 + row * 35) / 400 * 3.32;
 }
 
-export default function ElfBackdrop() {
+function spaceRows(positions: number[], minimumGap: number) {
+  const spaced = [...positions];
+  for (let index = 1; index < spaced.length; index++) {
+    spaced[index] = Math.max(spaced[index], spaced[index - 1] + minimumGap);
+  }
+  const shift = (positions.reduce((sum, value) => sum + value, 0) - spaced.reduce((sum, value) => sum + value, 0)) / positions.length;
+  return spaced.map((position) => position + shift);
+}
+
+export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, item: number) => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const interactionRef = useRef<HTMLDivElement>(null);
+  const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -64,10 +78,19 @@ export default function ElfBackdrop() {
     const drawing = context;
     const surface = canvas;
     const element = host;
+    const interactions = interactionRef.current;
+    const buttons = buttonRefs.current.filter((button): button is HTMLButtonElement => button !== null);
+    if (!interactions || buttons.length !== 3) return;
     const textures: HTMLCanvasElement[] = [];
     const assemblyWorld = createAssemblyWorld();
     const locale = document.documentElement.lang;
     const channelNames = locale === "ru" ? ["GitHub", "Почта", "Telegram"] : ["GitHub", "Email", "Telegram"];
+    const achievementNames = locale === "ru" ? ["CTF", "Исследование", "Публикация"] : ["CTF", "Research", "Publication"];
+    const interactionNames = [profileNames, [".text", ".rodata", ".data"], achievementNames, channelNames];
+    const groupNames = locale === "ru"
+      ? ["Обо мне в схеме ELF", "Материалы образца", "Точки останова достижений", "Символы контактов"]
+      : ["About me in the ELF scene", "Sample materials", "Achievement breakpoints", "Contact symbols"];
+    const styleCache = new WeakMap<HTMLElement, Map<string, string>>();
 
     let frame = initialFrame;
     let width = 0;
@@ -75,6 +98,7 @@ export default function ElfBackdrop() {
     let headerBottom = 96;
     let footerHeight = 65;
     let copyTop = 320;
+    let copyRight = 0;
     let pixelRatio = 1;
     let mono = "monospace";
     let disposed = false;
@@ -85,6 +109,16 @@ export default function ElfBackdrop() {
     let lineFlight = 1;
     let projectFocus = [1, 0, 0];
     let focusTransition: FocusTransition | null = null;
+    let hoveredItem = -1;
+    let focusedItem = -1;
+
+    function setStyle(target: HTMLElement, property: string, value: string) {
+      let cache = styleCache.get(target);
+      if (!cache) { cache = new Map(); styleCache.set(target, cache); }
+      if (cache.get(property) === value) return;
+      cache.set(property, value);
+      target.style.setProperty(property, value);
+    }
 
     function createTextures() {
       textures.length = 0;
@@ -224,6 +258,143 @@ export default function ElfBackdrop() {
     function planeZ(index: number, view: Camera) {
       const base = (index - 1.5) * view.separation;
       return mix(base, -1.5 * view.separation - 0.38, focusWeight(index));
+    }
+
+    function profileCorners(index: number, view: Camera): Point[] {
+      const left = -3 + (22 + index * 215) / 720 * 6;
+      const right = left + 210 / 720 * 6;
+      const top = -1.66 + 181 / 400 * 3.32;
+      const bottom = top + 70 / 400 * 3.32;
+      const z = planeZ(2, view);
+      return [[left, top, z], [right, top, z], [right, bottom, z], [left, bottom, z]];
+    }
+
+    function traceMarkers(view: Camera) {
+      const z = planeZ(1, view) - 0.025;
+      const minimumX = width < 760 ? 24 : copyRight + 26;
+      const sources = stopRows.map((row) => project([-3.22, instructionY(row), z], view));
+      const positions = spaceRows(sources.map((source) => source.y), 46);
+      return sources.map((source, index) => ({ source, x: Math.max(minimumX, source.x), y: positions[index] }));
+    }
+
+    function symbolRows(view: Camera) {
+      const rows = [0, 1, 2].map((index) => {
+        const y = -0.45 + index * 0.8;
+        const left = project([-2.9, y, -0.8], view);
+        const right = project([3.35, y, -0.15], view);
+        return { left, right, x: (left.x + right.x) / 2, y: (left.y + right.y) / 2 };
+      });
+      const positions = spaceRows(rows.map((row) => row.y), 46);
+      return rows.map((row, index) => ({ ...row, offsetY: positions[index] - row.y, centerY: positions[index] }));
+    }
+
+    function hitTargets(view: Camera, stage: number): HitTarget[] {
+      if (stage === 0) {
+        return profileNames.map((_, index) => {
+          const points = profileCorners(index, view).map((point) => project(point, view));
+          const left = Math.min(...points.map((point) => point.x));
+          const right = Math.max(...points.map((point) => point.x));
+          const top = Math.min(...points.map((point) => point.y));
+          const bottom = Math.max(...points.map((point) => point.y));
+          const targetWidth = Math.max(44, right - left);
+          const targetHeight = Math.max(44, bottom - top);
+          const point = { x: (left + right) / 2, y: (top + bottom) / 2, z: 0 };
+          return { x: point.x - targetWidth / 2, y: point.y - targetHeight / 2, width: targetWidth, height: targetHeight, point };
+        });
+      }
+      if (stage === 1) {
+        const mobile = width < 760;
+        const targetWidth = mobile ? Math.min(96, (width - 48) / 3) : 98;
+        const gap = mobile ? 8 : 14;
+        const railWidth = targetWidth * 3 + gap * 2;
+        const start = clamp(view.cx - railWidth / 2, mobile ? 16 : copyRight + 26, width - railWidth - 16);
+        const y = mobile ? copyTop - 34 : Math.min(height - footerHeight - 38, view.cy + view.scale * 3.5);
+        return [0, 1, 2].map((index) => ({
+          x: start + index * (targetWidth + gap), y: y - 22, width: targetWidth, height: 44,
+          point: project([-2.65, -1.45, planeZ(index + 1, view)], view),
+        }));
+      }
+      if (stage === 2) {
+        return traceMarkers(view).map((point) => ({
+          x: point.x - 22, y: point.y - 22, width: 44, height: 44,
+          point: { x: point.x, y: point.y, z: 0 },
+        }));
+      }
+      return symbolRows(view).map((row) => ({
+        x: Math.min(row.left.x, row.right.x), y: row.centerY - 22,
+        width: Math.max(44, Math.abs(row.right.x - row.left.x)), height: 44,
+        point: { x: row.x, y: row.centerY, z: 0 },
+      }));
+    }
+
+    function updateInteractions(view: Camera, objectVisibility: number) {
+      const scene = document.querySelector<HTMLElement>('.story-scene[data-active="true"]');
+      const stage = Number(scene?.dataset.scene ?? Math.round(frame.phase));
+      const available = objectVisibility > 0.6 && Math.abs(frame.phase - stage) < 0.14;
+      if (!available && interactions!.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement).blur();
+        focusedItem = -1;
+      }
+      interactions!.hidden = !available;
+      interactions!.dataset.elfScene = String(stage);
+      element.dataset.interactionStage = available ? String(stage) : "";
+      if (!available) { hoveredItem = -1; return; }
+      interactions!.setAttribute("aria-label", groupNames[stage]);
+      const targets = hitTargets(view, stage);
+      buttons.forEach((button, index) => {
+        const target = targets[index];
+        setStyle(button, "left", `${target.x.toFixed(2)}px`);
+        setStyle(button, "top", `${target.y.toFixed(2)}px`);
+        setStyle(button, "width", `${target.width.toFixed(2)}px`);
+        setStyle(button, "height", `${target.height.toFixed(2)}px`);
+        button.dataset.labelVisible = String(stage === 1);
+        button.dataset.elfScene = String(stage);
+        button.setAttribute("aria-label", stage === 1 ? `${interactionNames[stage][index]} / ${materialNames[index]}` : interactionNames[stage][index]);
+        button.setAttribute("aria-pressed", String(selection[stage] === index));
+        const label = button.querySelector<HTMLElement>(".elf-hit-label");
+        if (label && label.textContent !== interactionNames[stage][index]) label.textContent = interactionNames[stage][index];
+      });
+      if (stage === 1) {
+        drawing.save();
+        targets.forEach((target, index) => {
+          drawing.beginPath();
+          drawing.moveTo(target.point.x, target.point.y);
+          drawing.lineTo(target.x + target.width / 2, target.y + 4);
+          drawing.strokeStyle = index === selection[stage] ? "#73cbb47a" : "#40837450";
+          drawing.lineWidth = 0.75;
+          drawing.stroke();
+        });
+        drawing.restore();
+      }
+      const preview = focusedItem >= 0 ? focusedItem : hoveredItem;
+      if (preview < 0) return;
+      drawing.save();
+      drawing.shadowColor = "#0abab5";
+      drawing.shadowBlur = 18;
+      if (stage === 0) polygon(profileCorners(preview, view), view, "#0abab51a", "#b0ffec");
+      if (stage === 1) {
+        const z = planeZ(preview + 1, view);
+        polygon([[-3, -1.66, z], [3, -1.66, z], [3, 1.66, z], [-3, 1.66, z]], view, "#0abab508", "#9cf5e6a8");
+      }
+      if (stage === 2) {
+        const target = targets[preview];
+        drawing.beginPath();
+        drawing.arc(target.point.x, target.point.y, 10, 0, Math.PI * 2);
+        drawing.strokeStyle = "#b0ffec";
+        drawing.lineWidth = 1;
+        drawing.stroke();
+        drawing.shadowBlur = 0;
+        drawing.fillStyle = "#b0ffec";
+        drawing.font = `400 11px ${mono}`;
+        const label = achievementNames[preview];
+        drawing.fillText(label, clamp(target.point.x + 14, 16, width - drawing.measureText(label).width - 16), target.point.y - 12);
+      }
+      if (stage === 3) {
+        const y = -0.45 + preview * 0.8;
+        drawing.translate(0, symbolRows(view)[preview].offsetY);
+        polygon([[-2.9, y - 0.26, -0.82], [0, y - 0.26, -0.82], [0, y + 0.26, -0.82], [-2.9, y + 0.26, -0.82]], view, "#0abab526", "#9cf5e6a8");
+      }
+      drawing.restore();
     }
 
     function drawPlanes(view: Camera, opacity: number) {
@@ -367,10 +538,17 @@ export default function ElfBackdrop() {
       path([[rail, instructionY(0), z], [rail, instructionY(6), z]], view, "#4baf98");
       path([[2.95, instructionY(5), z], [3.25, instructionY(5), z], [3.25, instructionY(2), z], [2.95, instructionY(2), z]], view, "#0abab5");
       polygon([[3.04, instructionY(2) - 0.055, z], [2.94, instructionY(2), z], [3.04, instructionY(2) + 0.055, z]], view, "#9cf5e6");
+      const markers = traceMarkers(view);
       stopRows.forEach((row, index) => {
-        const point = project([rail, instructionY(row), z], view);
+        const point = markers[index];
         const active = index === selected;
         path([[rail, instructionY(row), z], [-2.86, instructionY(row), z]], view, active ? "#9cf5e6" : "#376f60");
+        drawing.beginPath();
+        drawing.moveTo(point.source.x, point.source.y);
+        drawing.lineTo(point.x, point.y);
+        drawing.strokeStyle = active ? "#9cf5e6a8" : "#376f6080";
+        drawing.lineWidth = 1;
+        drawing.stroke();
         drawing.beginPath();
         drawing.arc(point.x, point.y, active ? 5 : 3, 0, Math.PI * 2);
         drawing.fillStyle = active ? "#9cf5e6" : "#09251f";
@@ -382,7 +560,10 @@ export default function ElfBackdrop() {
         drawing.shadowBlur = 0;
       });
       const selectedRow = stopRows[selected];
-      const point = project([rail, mix(instructionY(0), instructionY(selectedRow), lineFlight), z], view);
+      const marker = markers[selected];
+      const railPoint = project([rail, mix(instructionY(0), instructionY(selectedRow), Math.min(1, lineFlight / 0.8)), z], view);
+      const markerFlight = smooth((lineFlight - 0.8) / 0.2);
+      const point = { x: mix(railPoint.x, marker.x, markerFlight), y: mix(railPoint.y, marker.y, markerFlight) };
       drawing.beginPath();
       drawing.arc(point.x, point.y, 3, 0, Math.PI * 2);
       drawing.fillStyle = "#d7fff2";
@@ -410,7 +591,10 @@ export default function ElfBackdrop() {
       const got = project([1, -1.2, -0.15], view);
       drawing.fillText(".dynsym", origin.x, origin.y);
       drawing.fillText(".got", got.x, got.y);
+      const rows = symbolRows(view);
       for (let index = 0; index < 3; index++) {
+        drawing.save();
+        drawing.translate(0, rows[index].offsetY);
         const y = -0.45 + index * 0.8;
         const active = index === selected;
         const line: Point[] = [[-0.05, y, symbolZ], [0.8, y, -0.15], [1.05, y, -0.15]];
@@ -441,6 +625,7 @@ export default function ElfBackdrop() {
           drawing.fill();
           drawing.shadowBlur = 0;
         }
+        drawing.restore();
       }
       drawing.restore();
     }
@@ -485,6 +670,7 @@ export default function ElfBackdrop() {
         drawing.fillRect(0, copyTop - 45, width, height - copyTop + 45);
       }
       if (frame.phase < 0.75) drawExtraction(view, (1 - smooth((frame.phase - 0.35) / 0.4)) * objectVisibility);
+      updateInteractions(view, objectVisibility);
       element.dataset.worldArrival = world.arrival.toFixed(4);
       element.dataset.worldZoom = world.cameraZoom.toFixed(4);
       element.dataset.objectScale = view.scale.toFixed(3);
@@ -526,6 +712,7 @@ export default function ElfBackdrop() {
       footerHeight = document.querySelector(".site-footer")?.getBoundingClientRect().height ?? 65;
       const panel = document.querySelector(".scene-panel");
       copyTop = panel ? parseFloat(getComputedStyle(panel).paddingTop) : 320;
+      copyRight = document.querySelector(".scene-copy-window")?.getBoundingClientRect().right ?? width * 0.38;
       pixelRatio = Math.min(devicePixelRatio || 1, 1.5);
       surface.width = Math.round(width * pixelRatio);
       surface.height = Math.round(height * pixelRatio);
@@ -544,6 +731,17 @@ export default function ElfBackdrop() {
     observer.observe(element);
     addEventListener(ELF_FRAME_EVENT, updateFrame);
     addEventListener("visibilitychange", scheduleResize);
+    const buttonListeners = buttons.map((button, index) => {
+      const enter = () => { hoveredItem = index; draw(); };
+      const leave = () => { hoveredItem = -1; draw(); };
+      const focus = () => { focusedItem = index; draw(); };
+      const blur = () => { focusedItem = -1; draw(); };
+      button.addEventListener("pointerenter", enter);
+      button.addEventListener("pointerleave", leave);
+      button.addEventListener("focus", focus);
+      button.addEventListener("blur", blur);
+      return { button, enter, leave, focus, blur };
+    });
     resize();
     document.fonts.ready.then(() => { if (!disposed) scheduleResize(); });
     return () => {
@@ -551,6 +749,12 @@ export default function ElfBackdrop() {
       observer.disconnect();
       removeEventListener(ELF_FRAME_EVENT, updateFrame);
       removeEventListener("visibilitychange", scheduleResize);
+      buttonListeners.forEach(({ button, enter, leave, focus, blur }) => {
+        button.removeEventListener("pointerenter", enter);
+        button.removeEventListener("pointerleave", leave);
+        button.removeEventListener("focus", focus);
+        button.removeEventListener("blur", blur);
+      });
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       assemblyWorld.dispose();
       textures.length = 0;
@@ -558,9 +762,30 @@ export default function ElfBackdrop() {
   }, []);
 
   return (
-    <div className="elf-backdrop" ref={hostRef} aria-hidden="true">
-      <canvas ref={canvasRef} data-elf-canvas />
-      <pre className="elf-fallback">{"7f 45 4c 46\n.text\n.rodata\n.data"}</pre>
+    <div className="elf-backdrop" ref={hostRef}>
+      <canvas ref={canvasRef} data-elf-canvas aria-hidden="true" />
+      <pre className="elf-fallback" aria-hidden="true">{"7f 45 4c 46\n.text\n.rodata\n.data"}</pre>
+      <div className="elf-interactions" ref={interactionRef} role="group" aria-label="ELF" hidden>
+        {profileNames.map((name, index) => (
+          <button
+            className="elf-hit-target"
+            type="button"
+            data-elf-item={index}
+            key={index}
+            ref={(button) => { buttonRefs.current[index] = button; }}
+            aria-label={name}
+            aria-pressed={index === 0}
+            onClick={() => {
+              const rawStage = hostRef.current?.dataset.interactionStage;
+              if (!rawStage) return;
+              const stage = Number(rawStage);
+              if (Number.isInteger(stage) && stage >= 0 && stage < 4) onSelectRef.current?.(stage, index);
+            }}
+          >
+            <span className="elf-hit-label">{name}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

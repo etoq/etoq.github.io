@@ -23,7 +23,7 @@ export default function MotionController() {
     const rootElement = document.getElementById("portfolio");
     if (!rootElement) return;
     const root = rootElement;
-    const scenes = Array.from(root.querySelectorAll<HTMLElement>("[data-scene]"));
+    const scenes = Array.from(root.querySelectorAll<HTMLElement>(".story-scene[data-scene]"));
     const windows = scenes.map((scene) => scene.querySelector<HTMLElement>(".scene-copy-window")!);
     const contents = scenes.map((scene) => scene.querySelector<HTMLElement>(".scene-content")!);
     const navLinks = Array.from(root.querySelectorAll<HTMLAnchorElement>("[data-section-link]"));
