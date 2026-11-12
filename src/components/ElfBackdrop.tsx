@@ -16,6 +16,7 @@ type Camera = {
 };
 type FocusTransition = { from: number[]; to: number[]; startedAt: number };
 type HitTarget = { x: number; y: number; width: number; height: number; point: ScreenPoint };
+type RectangleGlow = { image: HTMLCanvasElement; width: number; height: number; padding: number };
 
 const planeNames = ["ELF header", ".text", ".rodata", ".data"];
 const materialNames = ["analyze.py", "notes.md", "rule.yar"];
@@ -111,6 +112,62 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     let focusTransition: FocusTransition | null = null;
     let hoveredItem = -1;
     let focusedItem = -1;
+
+    function createRectangleGlow(glowWidth: number, glowHeight: number, color: string, fill: string, stroke?: string): RectangleGlow {
+      const padding = 64;
+      const image = document.createElement("canvas");
+      image.width = glowWidth + padding * 2;
+      image.height = glowHeight + padding * 2;
+      const ink = image.getContext("2d");
+      if (ink) {
+        ink.shadowColor = color;
+        ink.shadowBlur = 28;
+        ink.fillStyle = fill;
+        ink.fillRect(padding, padding, glowWidth, glowHeight);
+        if (stroke) {
+          ink.strokeStyle = stroke;
+          ink.strokeRect(padding, padding, glowWidth, glowHeight);
+        }
+        ink.clearRect(padding - 2, padding - 2, glowWidth + 4, glowHeight + 4);
+      }
+      return { image, width: glowWidth, height: glowHeight, padding };
+    }
+
+    // Rasterize large soft shadows once. Repainting their blur on every frame
+    // makes Canvas rendering expensive even when the JavaScript work is small.
+    const planeGlow = createRectangleGlow(720, 400, "#0abab529", "#061714f2");
+    const profileGlow = createRectangleGlow(210, 70, "#0abab5", "#0abab51a", "#b0ffec");
+    const materialGlow = createRectangleGlow(720, 400, "#0abab5", "#0abab508", "#9cf5e6a8");
+    const symbolGlow = createRectangleGlow(348, 62, "#0abab5", "#0abab526", "#9cf5e6a8");
+
+    function createPointGlow(radius: number, ring = false) {
+      const image = document.createElement("canvas");
+      image.width = image.height = 80;
+      const ink = image.getContext("2d");
+      if (ink) {
+        ink.shadowColor = "#0abab5";
+        ink.shadowBlur = ring ? 18 : 20;
+        ink.fillStyle = ink.strokeStyle = "#d6fff1";
+        ink.beginPath();
+        ink.arc(40, 40, radius, 0, Math.PI * 2);
+        if (ring) ink.stroke();
+        else ink.fill();
+        ink.shadowBlur = 0;
+        ink.globalCompositeOperation = "destination-out";
+        if (ring) { ink.lineWidth = 2; ink.stroke(); }
+        else ink.fill();
+      }
+      return image;
+    }
+
+    const flightGlow = createPointGlow(2.5);
+    const traceGlow = createPointGlow(3);
+    const breakpointGlow = createPointGlow(5);
+    const ringGlow = createPointGlow(10, true);
+
+    function drawPointGlow(x: number, y: number, glow: HTMLCanvasElement) {
+      drawing.drawImage(glow, x - glow.width / 2, y - glow.height / 2);
+    }
 
     function setStyle(target: HTMLElement, property: string, value: string) {
       let cache = styleCache.get(target);
@@ -248,6 +305,20 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       }
     }
 
+    function drawRectangleGlow(points: readonly Point[], view: Camera, glow: RectangleGlow) {
+      const origin = project(points[0], view);
+      const horizontal = project(points[1], view);
+      const vertical = project(points[3], view);
+      drawing.save();
+      drawing.transform(
+        (horizontal.x - origin.x) / glow.width, (horizontal.y - origin.y) / glow.width,
+        (vertical.x - origin.x) / glow.height, (vertical.y - origin.y) / glow.height,
+        origin.x, origin.y,
+      );
+      drawing.drawImage(glow.image, -glow.padding, -glow.padding);
+      drawing.restore();
+    }
+
     function focusWeight(index: number) {
       const profile = index === 2 ? 1 - smooth(frame.phase) : 0;
       const material = index > 0 ? projectFocus[index - 1] * smooth(1 - Math.abs(frame.phase - 1)) : 0;
@@ -369,21 +440,25 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       const preview = focusedItem >= 0 ? focusedItem : hoveredItem;
       if (preview < 0) return;
       drawing.save();
-      drawing.shadowColor = "#0abab5";
-      drawing.shadowBlur = 18;
-      if (stage === 0) polygon(profileCorners(preview, view), view, "#0abab51a", "#b0ffec");
+      if (stage === 0) {
+        const corners = profileCorners(preview, view);
+        drawRectangleGlow(corners, view, profileGlow);
+        polygon(corners, view, "#0abab51a", "#b0ffec");
+      }
       if (stage === 1) {
         const z = planeZ(preview + 1, view);
-        polygon([[-3, -1.66, z], [3, -1.66, z], [3, 1.66, z], [-3, 1.66, z]], view, "#0abab508", "#9cf5e6a8");
+        const corners: Point[] = [[-3, -1.66, z], [3, -1.66, z], [3, 1.66, z], [-3, 1.66, z]];
+        drawRectangleGlow(corners, view, materialGlow);
+        polygon(corners, view, "#0abab508", "#9cf5e6a8");
       }
       if (stage === 2) {
         const target = targets[preview];
+        drawPointGlow(target.point.x, target.point.y, ringGlow);
         drawing.beginPath();
         drawing.arc(target.point.x, target.point.y, 10, 0, Math.PI * 2);
         drawing.strokeStyle = "#b0ffec";
         drawing.lineWidth = 1;
         drawing.stroke();
-        drawing.shadowBlur = 0;
         drawing.fillStyle = "#b0ffec";
         drawing.font = `400 11px ${mono}`;
         const label = achievementNames[preview];
@@ -392,7 +467,9 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       if (stage === 3) {
         const y = -0.45 + preview * 0.8;
         drawing.translate(0, symbolRows(view)[preview].offsetY);
-        polygon([[-2.9, y - 0.26, -0.82], [0, y - 0.26, -0.82], [0, y + 0.26, -0.82], [-2.9, y + 0.26, -0.82]], view, "#0abab526", "#9cf5e6a8");
+        const corners: Point[] = [[-2.9, y - 0.26, -0.82], [0, y - 0.26, -0.82], [0, y + 0.26, -0.82], [-2.9, y + 0.26, -0.82]];
+        drawRectangleGlow(corners, view, symbolGlow);
+        polygon(corners, view, "#0abab526", "#9cf5e6a8");
       }
       drawing.restore();
     }
@@ -413,10 +490,8 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         const vertical = project(corners[3], view);
         drawing.save();
         drawing.globalAlpha *= mix(0.4, 1, focusWeight(plane.index));
-        drawing.shadowColor = "#0abab529";
-        drawing.shadowBlur = 20;
+        drawRectangleGlow(corners, view, planeGlow);
         polygon(corners, view, "#061714f2", plane.index === 2 ? "#68bdab" : "#2c6858");
-        drawing.shadowBlur = 0;
         drawing.transform((horizontal.x - origin.x) / 720, (horizontal.y - origin.y) / 720, (vertical.x - origin.x) / 400, (vertical.y - origin.y) / 400, origin.x, origin.y);
         drawing.beginPath();
         drawing.rect(0, 0, 720, 400);
@@ -515,13 +590,11 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       const u = 1 - t;
       const x = u * u * u * source.x + 3 * u * u * t * controlA.x + 3 * u * t * t * controlB.x + t * t * t * end.x;
       const y = u * u * u * source.y + 3 * u * u * t * controlA.y + 3 * u * t * t * controlB.y + t * t * t * end.y;
-      drawing.shadowColor = "#0abab5";
-      drawing.shadowBlur = 20;
+      drawPointGlow(x, y, flightGlow);
       drawing.beginPath();
       drawing.arc(x, y, 2.5, 0, Math.PI * 2);
       drawing.fillStyle = "#d6fff1";
       drawing.fill();
-      drawing.shadowBlur = 0;
       drawing.fillStyle = "#a1eedc";
       drawing.font = `400 11px ${mono}`;
       const word = t < 0.5 ? ["6c 69 6e 75 78", "72 65 76", "63 74 66"][selected] : profileNames[selected];
@@ -553,11 +626,9 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         drawing.arc(point.x, point.y, active ? 5 : 3, 0, Math.PI * 2);
         drawing.fillStyle = active ? "#9cf5e6" : "#09251f";
         drawing.strokeStyle = active ? "#c0fff0" : "#4baf98";
-        drawing.shadowColor = "#0abab5";
-        drawing.shadowBlur = active ? 20 : 0;
+        if (active) drawPointGlow(point.x, point.y, breakpointGlow);
         drawing.fill();
         drawing.stroke();
-        drawing.shadowBlur = 0;
       });
       const selectedRow = stopRows[selected];
       const marker = markers[selected];
@@ -567,10 +638,8 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       drawing.beginPath();
       drawing.arc(point.x, point.y, 3, 0, Math.PI * 2);
       drawing.fillStyle = "#d7fff2";
-      drawing.shadowColor = "#0abab5";
-      drawing.shadowBlur = 20;
+      drawPointGlow(point.x, point.y, traceGlow);
       drawing.fill();
-      drawing.shadowBlur = 0;
       const tag = project([-2.8, -1.92, z], view);
       drawing.font = `400 12px ${mono}`;
       drawing.fillStyle = "#b9f8e8";
@@ -620,10 +689,8 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
           drawing.beginPath();
           drawing.arc(end.x, end.y, 2.5, 0, Math.PI * 2);
           drawing.fillStyle = "#d2fff1";
-          drawing.shadowColor = "#0abab5";
-          drawing.shadowBlur = 20;
+          drawPointGlow(end.x, end.y, flightGlow);
           drawing.fill();
-          drawing.shadowBlur = 0;
         }
         drawing.restore();
       }

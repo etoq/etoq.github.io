@@ -31,7 +31,9 @@ export default function Portfolio({ locale }: { locale: Locale }) {
   const empty = [false, projects.length === 0, achievements.length === 0, contacts.length === 0];
 
   const selectItem = useCallback((scene: number, item: number) => {
-    setSelected((previous) => previous.map((value, index) => index === scene ? item : value));
+    setSelected((previous) => previous[scene] === item
+      ? previous
+      : previous.map((value, index) => index === scene ? item : value));
   }, []);
   const selectProject = useCallback((item: number) => selectItem(1, item), [selectItem]);
 
