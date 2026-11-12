@@ -125,6 +125,7 @@ h1, h2, h3, p, figure { margin: 0; }
 }
 .site-header nav a:hover, .site-header nav a[aria-current] { color: var(--light); }
 .site-header nav a:hover::after, .site-header nav a[aria-current]::after { transform: scaleX(1); }
+.header-controls { display: flex; align-items: center; gap: 14px; }
 .language-switch {
   display: inline-flex;
   align-items: center;
@@ -155,7 +156,7 @@ h1, h2, h3, p, figure { margin: 0; }
 .signature-beam { animation: signature-sweep 6.8s linear infinite; }
 .signature-ground { filter: drop-shadow(0 0 9px #0abab580); }
 .elf-interactions { position: absolute; inset: 0; pointer-events: none; }
-.elf-hit-target {
+.elf-hit-target, .elf-xref-target {
   position: absolute;
   min-width: 44px;
   min-height: 44px;
@@ -170,6 +171,8 @@ h1, h2, h3, p, figure { margin: 0; }
 }
 .elf-hit-target[data-label-visible="true"]:hover, .elf-hit-target[data-label-visible="true"]:focus-visible { border-color: #9cf5e680; background: #0abab51a; box-shadow: 0 0 25px #0abab51c; }
 .elf-hit-target[data-label-visible="false"]:focus-visible { outline: none; }
+.elf-xref-target:focus-visible { outline: none; }
+.elf-xref-interactions { position: absolute; inset: 0; pointer-events: none; }
 .elf-hit-target[data-label-visible="true"] { background: #04100ff2; border-color: #315b50; }
 .elf-hit-target[data-label-visible="true"][aria-pressed="true"] { border-color: var(--tiffany); background: #08231f; }
 .elf-hit-label { display: block; padding: 8px 6px; font: 400 11px/1.6 var(--font-mono), monospace; white-space: nowrap; }
@@ -248,6 +251,7 @@ h1, h2, h3, p, figure { margin: 0; }
 .project-console-empty { color: var(--light); font: 400 15px/1.7 var(--font-mono), monospace; }
 .project-console .project p { margin-top: 10px; color: var(--muted); font-size: 12px; }
 .project-console .project h3 { color: var(--text); font-size: 15px; font-weight: 400; }
+.portfolio[data-graphics="lite"] .signature-rim, .portfolio[data-graphics="lite"] .signature-ground { filter: none; }
 .site-footer {
   position: fixed;
   bottom: 0;
@@ -298,6 +302,7 @@ h1, h2, h3, p, figure { margin: 0; }
 @media (max-width: 759px) {
   :root { --gutter: 24px; --scene-safe-top: clamp(320px, 47svh, 410px); --scene-safe-bottom: 76px; }
   .site-header { min-height: 0; flex-wrap: wrap; column-gap: 20px; row-gap: 3px; padding: 15px 0 10px; }
+  .header-controls { gap: 10px; }
   .wordmark { font-size: 30px; }
   .site-header nav { order: 3; width: 100%; justify-content: space-between; flex-wrap: nowrap; gap: 8px; }
   .site-header nav a { min-height: 40px; font-size: 11px; white-space: nowrap; }

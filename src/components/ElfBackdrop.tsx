@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ELF_FRAME_EVENT, elfInstructions, type ElfFrame } from "@/lib/elf";
+import { ELF_FRAME_EVENT, elfInstructions, elfXrefs, getTraceState, initialLabState, scanElfSample, traceSequence, type ElfFrame } from "@/lib/elf";
 import { createAssemblyWorld } from "@/lib/assembly-world";
 
 type Point = readonly [number, number, number];
@@ -22,7 +22,7 @@ const planeNames = ["ELF header", ".text", ".rodata", ".data"];
 const materialNames = ["analyze.py", "notes.md", "rule.yar"];
 const profileNames = ["linux", "reverse", "ctf"];
 const stopRows = [2, 5, 6];
-const decoderSteps = [0, 1, 2, 3, 4, 5, 2, 3, 4, 5, 2, 3, 4, 5, 6];
+const decoderSteps = traceSequence;
 const initialFrame: ElfFrame = {
   phase: 0,
   time: 0,
@@ -63,13 +63,20 @@ function spaceRows(positions: number[], minimumGap: number) {
   return spaced.map((position) => position + shift);
 }
 
-export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, item: number) => void }) {
+export default function ElfBackdrop({ onSelect, onXref }: {
+  onSelect?: (scene: number, item: number) => void;
+  onXref?: (index: number) => void;
+}) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const interactionRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const xrefInteractionRef = useRef<HTMLDivElement>(null);
+  const xrefButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const onXrefRef = useRef(onXref);
+  onXrefRef.current = onXref;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -81,8 +88,11 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     const element = host;
     const interactions = interactionRef.current;
     const buttons = buttonRefs.current.filter((button): button is HTMLButtonElement => button !== null);
-    if (!interactions || buttons.length !== 3) return;
+    const xrefInteractions = xrefInteractionRef.current;
+    const xrefButtons = xrefButtonRefs.current.filter((button): button is HTMLButtonElement => button !== null);
+    if (!interactions || !xrefInteractions || buttons.length !== 3 || xrefButtons.length !== 3) return;
     const textures: HTMLCanvasElement[] = [];
+    let xrefTexture: HTMLCanvasElement | null = null;
     const assemblyWorld = createAssemblyWorld();
     const locale = document.documentElement.lang;
     const channelNames = locale === "ru" ? ["GitHub", "Почта", "Telegram"] : ["GitHub", "Email", "Telegram"];
@@ -94,6 +104,14 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     const styleCache = new WeakMap<HTMLElement, Map<string, string>>();
 
     let frame = initialFrame;
+    let lab = initialLabState;
+    let trace = getTraceState(0);
+    const yaraMatch = scanElfSample();
+    let xrefStartedAt = -10;
+    let yaraStartedAt = -10;
+    let xrefEmphasis = 0;
+    let hoveredXref = -1;
+    let focusedXref = -1;
     let width = 0;
     let height = 0;
     let headerBottom = 96;
@@ -223,7 +241,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
           ink.font = `400 16px ${mono}`;
           for (let row = 0; row < 8; row++) {
             for (let column = 0; column < 15; column++) {
-              const value = payload[(row * 15 + column) % payload.length];
+              const value = payload[row * 15 + column] ?? 0;
               ink.fillStyle = (column + row) % 5 === 0 ? "#79b7a5" : "#366e5e";
               ink.fillText(value.toString(16).padStart(2, "0"), 25 + column * 45, 112 + row * 31);
             }
@@ -245,6 +263,31 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         }
         textures.push(texture);
       }
+      xrefTexture = document.createElement("canvas");
+      xrefTexture.width = 720;
+      xrefTexture.height = 400;
+      const ink = xrefTexture.getContext("2d");
+      if (ink) {
+        ink.drawImage(textures[1], 0, 0);
+        ink.fillStyle = "#061614";
+        ink.fillRect(16, 85, 688, 300);
+        ink.fillStyle = "#568f83";
+        ink.font = `400 14px ${mono}`;
+        ink.fillText(".rodata / RIP-relative references", 25, 110);
+        elfXrefs.forEach((xref, index) => {
+          const y = 159 + index * 65;
+          ink.font = `400 17px ${mono}`;
+          ink.fillStyle = "#4d7e70";
+          ink.fillText(xref.instructionAddress.toString(16), 25, y);
+          ink.fillStyle = "#70a997";
+          ink.fillText(xref.bytes, 134, y);
+          ink.fillStyle = "#bbdfd3";
+          ink.fillText(xref.instruction, 350, y);
+          ink.font = `400 12px ${mono}`;
+          ink.fillStyle = "#568f83";
+          ink.fillText(`0x${xref.address.toString(16)}  "${xref.name}"`, 350, y + 22);
+        });
+      }
     }
 
     function camera(world: ReturnType<typeof assemblyWorld.draw>): Camera {
@@ -252,19 +295,20 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       const regionTop = headerBottom + (mobile ? 14 : 24);
       const regionBottom = mobile ? copyTop - 18 : height - footerHeight - 40;
       const availableHeight = Math.max(80, regionBottom - regionTop);
-      const verticalExtent = interpolate([4.3, 6.2, 4.1, 4.1], frame.phase);
+      const reference = projectFocus[1] * smooth(1 - Math.abs(frame.phase - 1));
+      const verticalExtent = interpolate([4.3, 6.2, 4.1, 4.1], frame.phase) + reference * 2;
       const horizontalScale = mobile ? width / 8.65 : width / 13;
       const scale = Math.min(horizontalScale, availableHeight / verticalExtent, mobile ? 52 : 104);
       const preferredCenter = mobile ? Math.min(258, Math.max(205, height * 0.34)) : height * 0.46;
       const halfExtent = scale * verticalExtent / 2;
       const arrival = smooth((world.arrival - 0.1) / 0.9);
       return {
-        yaw: interpolate([-0.4, -0.63, 0.28, -0.22], frame.phase) + frame.pointerX * 0.085 + (1 - arrival) * 0.2,
+        yaw: interpolate([-0.4, -0.63, 0.28, -0.22], frame.phase) + frame.pointerX * 0.085 + (1 - arrival) * 0.2 + xrefEmphasis * 0.12,
         pitch: interpolate([-0.29, -0.43, -0.15, -0.2], frame.phase) + frame.pointerY * 0.055 - (1 - arrival) * 0.12,
         separation: interpolate([0.33, 1.35, 0.25, 0.45], frame.phase),
         cx: mix(world.focusX, width * (mobile ? 0.5 : 0.67), arrival),
         cy: mix(world.focusY, clamp(preferredCenter, regionTop + halfExtent, regionBottom - halfExtent), arrival),
-        scale: scale * (0.14 + 0.86 * arrival),
+        scale: scale * (0.14 + 0.86 * arrival) * (1 - xrefEmphasis * 0.06),
       };
     }
 
@@ -306,6 +350,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     }
 
     function drawRectangleGlow(points: readonly Point[], view: Camera, glow: RectangleGlow) {
+      if (frame.quality === "lite") return;
       const origin = project(points[0], view);
       const horizontal = project(points[1], view);
       const vertical = project(points[3], view);
@@ -321,7 +366,9 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
 
     function focusWeight(index: number) {
       const profile = index === 2 ? 1 - smooth(frame.phase) : 0;
-      const material = index > 0 ? projectFocus[index - 1] * smooth(1 - Math.abs(frame.phase - 1)) : 0;
+      let material = index > 0 ? projectFocus[index - 1] * smooth(1 - Math.abs(frame.phase - 1)) : 0;
+      if (index === 1) material = Math.max(material, projectFocus[1] * 0.9 * smooth(1 - Math.abs(frame.phase - 1)), xrefEmphasis * 0.95);
+      if (index === 2) material *= 1 - xrefEmphasis * 0.5;
       const execution = index === 1 ? smooth(1 - Math.abs(frame.phase - 2)) : 0;
       return clamp(profile + material + execution);
     }
@@ -335,16 +382,23 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       return (index - 1.5) * 0.13 * smooth(1 - Math.abs(frame.phase - 1));
     }
 
+    function planeOffsetY(index: number) {
+      const reference = projectFocus[1] * smooth(1 - Math.abs(frame.phase - 1));
+      if (index === 1) return -reference;
+      return index === 2 ? reference * 1.6 : 0;
+    }
+
     function planeCorners(index: number, view: Camera): Point[] {
       const x = planeOffset(index);
+      const y = planeOffsetY(index);
       const z = planeZ(index, view);
-      return [[-3 + x, -1.66, z], [3 + x, -1.66, z], [3 + x, 1.66, z], [-3 + x, 1.66, z]];
+      return [[-3 + x, -1.66 + y, z], [3 + x, -1.66 + y, z], [3 + x, 1.66 + y, z], [-3 + x, 1.66 + y, z]];
     }
 
     function profileCorners(index: number, view: Camera): Point[] {
       const left = -3 + planeOffset(2) + (22 + index * 215) / 720 * 6;
       const right = left + 210 / 720 * 6;
-      const top = -1.66 + 181 / 400 * 3.32;
+      const top = -1.66 + planeOffsetY(2) + 181 / 400 * 3.32;
       const bottom = top + 70 / 400 * 3.32;
       const z = planeZ(2, view);
       return [[left, top, z], [right, top, z], [right, bottom, z], [left, bottom, z]];
@@ -369,20 +423,24 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       return rows.map((row, index) => ({ ...row, offsetY: positions[index] - row.y, centerY: positions[index] }));
     }
 
+    function profileTargets(view: Camera): HitTarget[] {
+      const targets = profileNames.map((_, index) => {
+        const points = profileCorners(index, view).map((point) => project(point, view));
+        const left = Math.min(...points.map((point) => point.x));
+        const right = Math.max(...points.map((point) => point.x));
+        const top = Math.min(...points.map((point) => point.y));
+        const bottom = Math.max(...points.map((point) => point.y));
+        const targetWidth = Math.max(44, right - left);
+        const targetHeight = Math.max(44, bottom - top);
+        const point = { x: (left + right) / 2, y: (top + bottom) / 2, z: 0 };
+        return { x: point.x - targetWidth / 2, y: point.y - targetHeight / 2, width: targetWidth, height: targetHeight, point };
+      });
+      const centers = spaceRows(targets.map((target) => target.point.x), Math.max(...targets.map((target) => target.width)) + 2);
+      return targets.map((target, index) => ({ ...target, x: centers[index] - target.width / 2 }));
+    }
+
     function hitTargets(view: Camera, stage: number): HitTarget[] {
-      if (stage === 0) {
-        return profileNames.map((_, index) => {
-          const points = profileCorners(index, view).map((point) => project(point, view));
-          const left = Math.min(...points.map((point) => point.x));
-          const right = Math.max(...points.map((point) => point.x));
-          const top = Math.min(...points.map((point) => point.y));
-          const bottom = Math.max(...points.map((point) => point.y));
-          const targetWidth = Math.max(44, right - left);
-          const targetHeight = Math.max(44, bottom - top);
-          const point = { x: (left + right) / 2, y: (top + bottom) / 2, z: 0 };
-          return { x: point.x - targetWidth / 2, y: point.y - targetHeight / 2, width: targetWidth, height: targetHeight, point };
-        });
-      }
+      if (stage === 0) return profileTargets(view);
       if (stage === 1) {
         const mobile = width < 760;
         const targetWidth = mobile ? Math.min(96, (width - 48) / 3) : 98;
@@ -392,7 +450,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         const y = mobile ? copyTop - 34 : Math.min(height - footerHeight - 38, view.cy + view.scale * 3.5);
         return [0, 1, 2].map((index) => ({
           x: start + index * (targetWidth + gap), y: y - 22, width: targetWidth, height: 44,
-          point: project([-2.65 + planeOffset(index + 1), -1.45, planeZ(index + 1, view)], view),
+          point: project([-2.65 + planeOffset(index + 1), -1.45 + planeOffsetY(index + 1), planeZ(index + 1, view)], view),
         }));
       }
       if (stage === 2) {
@@ -406,6 +464,61 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         width: Math.max(44, Math.abs(row.right.x - row.left.x)), height: 44,
         point: { x: row.x, y: row.centerY, z: 0 },
       }));
+    }
+
+    function xrefMode() {
+      return selection[1] === 1 && Math.abs(frame.phase - 1) < 0.5;
+    }
+
+    function manualTrace() {
+      return selection[1] === 0 && lab.traceStep >= 0 && Math.abs(frame.phase - 1) < 0.5;
+    }
+
+    function drawXrefs(view: Camera, visibility: number) {
+      const available = xrefMode() && visibility > 0.6 && Math.abs(frame.phase - 1) < 0.14;
+      if (!available && xrefInteractions!.contains(document.activeElement)) {
+        (document.activeElement as HTMLElement).blur();
+        focusedXref = -1;
+      }
+      xrefInteractions!.hidden = !available;
+      if (!available) { hoveredXref = -1; return; }
+      const targets = profileTargets(view);
+      xrefButtons.forEach((button, index) => {
+        const target = targets[index];
+        setStyle(button, "left", `${target.x.toFixed(2)}px`);
+        setStyle(button, "top", `${target.y.toFixed(2)}px`);
+        setStyle(button, "width", `${target.width.toFixed(2)}px`);
+        setStyle(button, "height", `${target.height.toFixed(2)}px`);
+        button.setAttribute("aria-pressed", String(lab.xref === index));
+      });
+      const preview = focusedXref >= 0 ? focusedXref : hoveredXref;
+      drawing.save();
+      if (preview >= 0) {
+        const corners = profileCorners(preview, view);
+        drawRectangleGlow(corners, view, profileGlow);
+        polygon(corners, view, "#0abab51a", "#b0ffec");
+      }
+      const source = targets[lab.xref].point;
+      const target = project([0.8 + planeOffset(1), -1.66 + planeOffsetY(1) + (149 + lab.xref * 65) / 400 * 3.32, planeZ(1, view)], view);
+      const controlA = { x: source.x - 85, y: source.y + 65 };
+      const controlB = { x: target.x - 85, y: target.y + 65 };
+      drawing.beginPath();
+      drawing.moveTo(source.x, source.y);
+      drawing.bezierCurveTo(controlA.x, controlA.y, controlB.x, controlB.y, target.x, target.y);
+      drawing.strokeStyle = "#73cbb482";
+      drawing.lineWidth = 1;
+      drawing.stroke();
+      const t = frame.reduced ? 1 : smooth((frame.time - xrefStartedAt) / 1.2);
+      const u = 1 - t;
+      const x = u ** 3 * source.x + 3 * u * u * t * controlA.x + 3 * u * t * t * controlB.x + t ** 3 * target.x;
+      const y = u ** 3 * source.y + 3 * u * u * t * controlA.y + 3 * u * t * t * controlB.y + t ** 3 * target.y;
+      drawPointGlow(x, y, flightGlow);
+      drawing.fillStyle = "#d6fff1";
+      drawing.beginPath();
+      drawing.arc(x, y, 2.5, 0, Math.PI * 2);
+      drawing.fill();
+      drawing.restore();
+      element.dataset.xrefAddress = elfXrefs[lab.xref].instructionAddress.toString(16);
     }
 
     function updateInteractions(view: Camera, objectVisibility: number) {
@@ -503,9 +616,9 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         drawing.beginPath();
         drawing.rect(0, 0, 720, 400);
         drawing.clip();
-        drawing.drawImage(textures[plane.index], 0, 0);
+        drawing.drawImage(plane.index === 1 && xrefMode() && xrefTexture ? xrefTexture : textures[plane.index], 0, 0);
         if (plane.index === 2) {
-          const index = selection[0];
+          const index = xrefMode() ? lab.xref : selection[0];
           drawing.fillStyle = "#0abab526";
           drawing.fillRect(22 + index * 215, 181, 210, 70);
           drawing.strokeStyle = "#9cf5e6";
@@ -513,22 +626,60 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
           drawing.strokeRect(22 + index * 215, 181, 210, 70);
         }
         if (plane.index === 1) {
-          const traceOpacity = smooth(1 - Math.abs(frame.phase - 2));
-          const row = stopRows[selection[2]];
-          drawing.save();
-          drawing.globalAlpha *= traceOpacity;
+          if (xrefMode()) {
+            drawing.fillStyle = "#0abab52d";
+            drawing.fillRect(18, 137 + lab.xref * 65, 684, 28);
+            drawing.fillStyle = "#9cf5e6";
+            drawing.fillRect(18, 137 + lab.xref * 65, 3, 28);
+          } else {
+            const traceOpacity = smooth(1 - Math.abs(frame.phase - 2));
+            const row = stopRows[selection[2]];
+            drawing.save();
+            drawing.globalAlpha *= traceOpacity;
+            drawing.fillStyle = "#0abab536";
+            drawing.fillRect(18, 94 + row * 35, 684, 34);
+            drawing.fillStyle = "#9cf5e6";
+            drawing.fillRect(18, 94 + row * 35, 3, 34);
+            drawing.restore();
+            const cycle = frame.reduced ? -1 : (frame.time % 8) / 0.38;
+            const automaticRow = cycle >= 0 && cycle < decoderSteps.length ? decoderSteps[Math.floor(cycle)] : null;
+            const activeRow = manualTrace() ? trace.nextRow : automaticRow;
+            if (activeRow !== null) {
+              drawing.fillStyle = "#0abab51e";
+              drawing.fillRect(20, 95 + activeRow * 35, 680, 32);
+              drawing.fillStyle = "#9cf5e6aa";
+              drawing.fillRect(20, 95 + activeRow * 35, 2, 32);
+            }
+          }
+        }
+        if (plane.index === 3 && manualTrace()) {
+          drawing.fillStyle = "#08251f";
+          drawing.fillRect(15, 285, 690, 95);
+          drawing.fillStyle = "#76baa5";
+          drawing.font = `400 13px ${mono}`;
+          drawing.fillText("memory / 00403000", 30, 307);
+          trace.memory.forEach((byte, index) => {
+            const x = 30 + index * 180;
+            drawing.fillStyle = trace.rdi - 0x403000 === index ? "#0abab530" : "#061614";
+            drawing.fillRect(x, 316, 152, 48);
+            drawing.fillStyle = "#b9f8e8";
+            drawing.font = `400 28px ${mono}`;
+            drawing.fillText(byte.toString(16).padStart(2, "0"), x + 13, 350);
+          });
+        }
+        if (plane.index === 3 && selection[1] === 2 && Math.abs(frame.phase - 1) < 0.5 && lab.yaraPulse > 0 && yaraMatch.matched) {
           drawing.fillStyle = "#0abab536";
-          drawing.fillRect(18, 94 + row * 35, 684, 34);
+          drawing.fillRect(18, 91, 143, 30);
+          drawing.strokeStyle = "#9cf5e6";
+          drawing.lineWidth = 1.5;
+          drawing.strokeRect(18, 91, 143, 30);
           drawing.fillStyle = "#9cf5e6";
-          drawing.fillRect(18, 94 + row * 35, 3, 34);
-          drawing.restore();
-          const cycle = frame.reduced ? -1 : (frame.time % 8) / 0.38;
-          if (cycle >= 0 && cycle < decoderSteps.length) {
-            const activeRow = decoderSteps[Math.floor(cycle)];
-            drawing.fillStyle = "#0abab51e";
-            drawing.fillRect(20, 95 + activeRow * 35, 680, 32);
-            drawing.fillStyle = "#9cf5e6aa";
-            drawing.fillRect(20, 95 + activeRow * 35, 2, 32);
+          drawing.font = `400 13px ${mono}`;
+          drawing.fillText("$encoded / offset 0x3000", 186, 113);
+          const progress = frame.reduced ? 1 : clamp((frame.time - yaraStartedAt) / 0.9);
+          if (progress < 1) {
+            drawing.fillStyle = "#d6fff16b";
+            drawing.fillRect(18 + 140 * progress, 91, 3, 30);
           }
         }
         if (!frame.reduced && frame.phase < 1.5) {
@@ -559,7 +710,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       const index = selection[1];
       const z = planeZ(index + 1, view);
       const x = planeOffset(index + 1);
-      const end: Point = [3.4 + x, 0.7 - index * 0.6, z];
+      const end: Point = [3.4 + x, 0.7 - index * 0.6 + planeOffsetY(index + 1), z];
       path([[2.8 + x, end[1], z], end], view, "#9cf5e6");
       const point = project(end, view);
       const name = materialNames[index];
@@ -746,17 +897,29 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       }
       if (frame.phase < 0.75) drawExtraction(view, (1 - smooth((frame.phase - 0.35) / 0.4)) * objectVisibility);
       updateInteractions(view, objectVisibility);
+      drawXrefs(view, objectVisibility);
       element.dataset.worldArrival = world.arrival.toFixed(4);
       element.dataset.worldZoom = world.cameraZoom.toFixed(4);
       element.dataset.objectScale = view.scale.toFixed(3);
       element.dataset.focusX = world.focusX.toFixed(3);
       element.dataset.focusY = world.focusY.toFixed(3);
+      element.dataset.renderQuality = frame.quality ?? "full";
+      element.dataset.labTraceStep = String(lab.traceStep);
+      element.dataset.traceRip = trace.rip === null ? "ret" : trace.rip.toString(16);
+      element.dataset.traceMemory = trace.memory.map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+      element.dataset.yaraMatched = String(lab.yaraPulse > 0 && yaraMatch.matched);
     }
 
     function updateFrame(event: Event) {
       const next = (event as CustomEvent<ElfFrame>).detail;
       const nextStage = Math.round(clamp(next.phase, 0, 3));
       const nextSelection = [0, 1, 2, 3].map((index) => clamp(Math.round(next.selected[index] ?? 0), 0, 2));
+      const nextLab = next.lab ?? initialLabState;
+      if (nextLab.xrefPulse !== lab.xrefPulse) xrefStartedAt = next.time;
+      if (nextLab.yaraPulse !== lab.yaraPulse) yaraStartedAt = next.time;
+      if (nextLab.traceStep !== lab.traceStep) trace = getTraceState(nextLab.traceStep);
+      lab = nextLab;
+      const qualityChanged = (next.quality ?? "full") !== (frame.quality ?? "full");
       const changed = nextStage !== activeStage || nextSelection.some((value, index) => value !== selection[index]);
       if (changed) flightStartedAt = next.time;
       if (nextSelection[1] !== selection[1]) {
@@ -766,6 +929,9 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       selection = nextSelection;
       activeStage = nextStage;
       frame = { ...next, phase: clamp(next.phase, 0, 3) };
+      const xrefProgress = (frame.time - xrefStartedAt) / 1.7;
+      xrefEmphasis = frame.reduced || selection[1] !== 1 ? 0
+        : smooth(xrefProgress / 0.4) * (1 - smooth((xrefProgress - 0.6) / 0.4)) * smooth(1 - Math.abs(frame.phase - 1) * 2);
       lineFlight = next.reduced || flightStartedAt < 0 ? 1 : clamp((next.time - flightStartedAt) / 0.9);
       if (focusTransition) {
         const transition = focusTransition;
@@ -774,7 +940,8 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         if (fraction === 1) focusTransition = null;
       }
       element.dataset.phase = frame.phase.toFixed(3);
-      draw();
+      if (qualityChanged) resize();
+      else draw();
     }
 
     function resize() {
@@ -788,7 +955,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       const panel = document.querySelector(".scene-panel");
       copyTop = panel ? parseFloat(getComputedStyle(panel).paddingTop) : 320;
       copyRight = document.querySelector(".scene-copy-window")?.getBoundingClientRect().right ?? width * 0.38;
-      pixelRatio = Math.min(devicePixelRatio || 1, 1.5);
+      pixelRatio = Math.min(devicePixelRatio || 1, frame.quality === "lite" ? 1 : 1.5);
       surface.width = Math.round(width * pixelRatio);
       surface.height = Math.round(height * pixelRatio);
       mono = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace";
@@ -817,6 +984,17 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       button.addEventListener("blur", blur);
       return { button, enter, leave, focus, blur };
     });
+    const xrefListeners = xrefButtons.map((button, index) => {
+      const enter = () => { hoveredXref = index; draw(); };
+      const leave = () => { hoveredXref = -1; draw(); };
+      const focus = () => { focusedXref = index; draw(); };
+      const blur = () => { focusedXref = -1; draw(); };
+      button.addEventListener("pointerenter", enter);
+      button.addEventListener("pointerleave", leave);
+      button.addEventListener("focus", focus);
+      button.addEventListener("blur", blur);
+      return { button, enter, leave, focus, blur };
+    });
     resize();
     document.fonts.ready.then(() => { if (!disposed) scheduleResize(); });
     return () => {
@@ -824,7 +1002,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       observer.disconnect();
       removeEventListener(ELF_FRAME_EVENT, updateFrame);
       removeEventListener("visibilitychange", scheduleResize);
-      buttonListeners.forEach(({ button, enter, leave, focus, blur }) => {
+      [...buttonListeners, ...xrefListeners].forEach(({ button, enter, leave, focus, blur }) => {
         button.removeEventListener("pointerenter", enter);
         button.removeEventListener("pointerleave", leave);
         button.removeEventListener("focus", focus);
@@ -833,6 +1011,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
       assemblyWorld.dispose();
       textures.length = 0;
+      xrefTexture = null;
     };
   }, []);
 
@@ -858,6 +1037,15 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
             }}
           >
             <span className="elf-hit-label">{name}</span>
+          </button>
+        ))}
+      </div>
+      <div className="elf-xref-interactions" ref={xrefInteractionRef} role="group" aria-label="XREF / .rodata" hidden>
+        {elfXrefs.map((xref, index) => (
+          <button type="button" className="elf-xref-target" data-xref-target={index} key={xref.name}
+            ref={(button) => { xrefButtonRefs.current[index] = button; }}
+            aria-pressed={index === 0} onClick={() => onXrefRef.current?.(index)}>
+            <span className="sr-only">{xref.name} / 0x{xref.instructionAddress.toString(16)}</span>
           </button>
         ))}
       </div>

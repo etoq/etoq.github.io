@@ -220,13 +220,14 @@ export function createAssemblyWorld() {
     });
   }
 
-  function drawAddressField(context: CanvasRenderingContext2D, cameraX: number, cameraY: number) {
+  function drawAddressField(context: CanvasRenderingContext2D, cameraX: number, cameraY: number, lite: boolean) {
     context.save();
     context.translate(cameraX * 0.14, cameraY * 0.12 - 180);
     context.scale(1.08, 0.92);
     context.lineWidth = 0.7;
     context.strokeStyle = "#295d541f";
     context.stroke(grid);
+    if (lite) { context.restore(); return; }
     context.strokeStyle = "#4e99824d";
     context.stroke(crosses);
     context.font = `400 10px ${fontFamily}`;
@@ -255,6 +256,7 @@ export function createAssemblyWorld() {
     const from = byId.get(connection.from)!;
     const to = byId.get(connection.to)!;
     const active = Math.max(focusWeight(from.id, frame.phase), focusWeight(to.id, frame.phase));
+    if (frame.quality === "lite" && active <= 0.01) return;
     const loop = from === to;
     const startX = loop ? from.x : from.x + from.width * 0.7;
     const startY = from.y + listingHeight(from) - 8;
@@ -285,6 +287,7 @@ export function createAssemblyWorld() {
     const texture = textures.get(listing.id);
     if (!texture) return;
     const active = focusWeight(listing.id, frame.phase);
+    if (frame.quality === "lite" && active <= 0.01) return;
     const depthX = frame.reduced ? 0 : frame.pointerX * listing.depth * 0.13;
     const depthY = frame.reduced ? 0 : frame.pointerY * listing.depth * 0.075;
     context.save();
@@ -362,8 +365,8 @@ export function createAssemblyWorld() {
     context.transform(1, -0.065, -0.12, 1, 0, 0);
     context.scale(scale, scale);
     context.translate(-cameraX, -cameraY);
-    drawAddressField(context, cameraX, cameraY);
-    drawMemoryRibbon(context, cameraX, cameraY, frame);
+    drawAddressField(context, cameraX, cameraY, frame.quality === "lite");
+    if (frame.quality !== "lite" || phase > 2.3) drawMemoryRibbon(context, cameraX, cameraY, frame);
     connections.forEach((connection, connectionIndex) => drawConnection(context, connection, connectionIndex, frame));
     listings.forEach((listing) => drawListing(context, listing, frame, arrival));
     context.restore();

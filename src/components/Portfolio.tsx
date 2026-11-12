@@ -3,11 +3,13 @@
 import { useCallback, useState } from "react";
 import { content, elfContent, publicData, type Locale } from "@/lib/content";
 import { localPath } from "@/lib/config";
+import { initialLabState, traceStepCount, type ElfLabState, type GraphicsQuality } from "@/lib/elf";
 import ElfBackdrop from "./ElfBackdrop";
 import AnalysisConsole from "./AnalysisConsole";
 import MotionController from "./MotionController";
 import ProjectConsole from "./ProjectConsole";
 import SignatureMark from "./SignatureMark";
+import GraphicsControl from "./GraphicsControl";
 
 const SECTION_IDS = ["about", "projects", "achievements", "contact"] as const;
 const SAMPLE_LABELS = [".rodata", "sections", "trace", ".dynsym"];
@@ -16,6 +18,8 @@ export default function Portfolio({ locale }: { locale: Locale }) {
   const copy = content[locale];
   const sceneCopy = elfContent[locale];
   const [selected, setSelected] = useState([0, 0, 0, 0]);
+  const [lab, setLab] = useState<ElfLabState>({ ...initialLabState });
+  const [graphics, setGraphics] = useState<GraphicsQuality>("full");
   const titles = ["eto", copy.projects, copy.achievements, copy.contact];
   const intros = [sceneCopy.intro, sceneCopy.projectIntro, sceneCopy.achievementIntro, sceneCopy.contactIntro];
   const tabs = [["linux", "reverse", "ctf"], ["analyze.py", "notes.md", "rule.yar"], sceneCopy.achievementTabs, ["github", "mail", "telegram"]];
@@ -36,9 +40,19 @@ export default function Portfolio({ locale }: { locale: Locale }) {
       : previous.map((value, index) => index === scene ? item : value));
   }, []);
   const selectProject = useCallback((item: number) => selectItem(1, item), [selectItem]);
+  const selectXref = useCallback((xref: number) => {
+    setLab((previous) => ({ ...previous, xref, xrefPulse: previous.xrefPulse + 1 }));
+  }, []);
+  const traceStep = useCallback((step: number) => {
+    setLab((previous) => ({ ...previous, traceStep: Math.max(-1, Math.min(traceStepCount, step)) }));
+  }, []);
+  const scanSample = useCallback(() => {
+    setLab((previous) => ({ ...previous, yaraPulse: previous.yaraPulse + 1 }));
+  }, []);
 
   return (
-    <div id="portfolio" className="portfolio" data-locale={locale}>
+    <div id="portfolio" className="portfolio" data-locale={locale} data-graphics={graphics}
+      data-xref={lab.xref} data-xref-pulse={lab.xrefPulse} data-trace-step={lab.traceStep} data-yara-pulse={lab.yaraPulse}>
       <a className="skip-link" href="#main">{copy.skip}</a>
       <span id="top" className="top-anchor" aria-hidden="true" />
       <div className="reading-progress" aria-hidden="true" />
@@ -47,9 +61,12 @@ export default function Portfolio({ locale }: { locale: Locale }) {
         <nav aria-label={locale === "ru" ? "Разделы сайта" : "Site sections"}>
           {SECTION_IDS.map((id) => <a key={id} href={`#${id}`} data-section-link>{copy.navigation[id]}</a>)}
         </nav>
-        <a className="language-switch" href={localPath(locale === "ru" ? "/en/" : "/")} hrefLang={locale === "ru" ? "en" : "ru"} aria-label={copy.language} data-language-link>
-          {locale === "ru" ? "EN" : "RU"}
-        </a>
+        <div className="header-controls">
+          <GraphicsControl locale={locale} onChange={setGraphics} />
+          <a className="language-switch" href={localPath(locale === "ru" ? "/en/" : "/")} hrefLang={locale === "ru" ? "en" : "ru"} aria-label={copy.language} data-language-link>
+            {locale === "ru" ? "EN" : "RU"}
+          </a>
+        </div>
       </header>
 
       <main id="main" className="story-track">
@@ -59,7 +76,8 @@ export default function Portfolio({ locale }: { locale: Locale }) {
               <div className="scene-copy-window">
                 <div className="scene-content">
                   {scene === 1 ? (
-                    <ProjectConsole locale={locale} selected={selected[1]} onSelect={selectProject} projects={projects} />
+                    <ProjectConsole locale={locale} selected={selected[1]} onSelect={selectProject} projects={projects}
+                      lab={lab} onXref={selectXref} onTraceStep={traceStep} onYaraScan={scanSample} />
                   ) : (
                     <>
                       <p className="elf-operation">{sceneCopy.operations[scene]}</p>
@@ -96,7 +114,7 @@ export default function Portfolio({ locale }: { locale: Locale }) {
           </section>
         ))}
       </main>
-      <ElfBackdrop onSelect={selectItem} />
+      <ElfBackdrop onSelect={selectItem} onXref={selectXref} />
       <footer className="site-footer">
         <span>{sceneCopy.sampleLabel}</span>
         <span className="sample-location" aria-hidden="true">eto.elf / <span data-sample-location>{SAMPLE_LABELS[0]}</span></span>
