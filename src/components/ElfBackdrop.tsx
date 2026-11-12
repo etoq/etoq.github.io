@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ELF_FRAME_EVENT, elfInstructions, type ElfFrame } from "@/lib/elf";
+import { ELF_FRAME_EVENT, elfInstructions, sceneCenterX, sceneCenterY, type ElfFrame } from "@/lib/elf";
 import { createAssemblyWorld } from "@/lib/assembly-world";
 
 type Point = readonly [number, number, number];
@@ -100,6 +100,8 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     let footerHeight = 65;
     let copyTop = 320;
     let copyRight = 0;
+    let copyTops = [320, 320, 320, 320];
+    let copyRights = [0, 0, 0, 0];
     let pixelRatio = 1;
     let mono = "monospace";
     let disposed = false;
@@ -249,22 +251,26 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
 
     function camera(world: ReturnType<typeof assemblyWorld.draw>): Camera {
       const mobile = width < 760;
+      copyTop = interpolate(copyTops, frame.phase);
+      copyRight = interpolate(copyRights, frame.phase);
+      const energy = frame.reduced ? 0 : (frame.energy ?? 0) * (frame.quality === "lite" ? 0.4 : 1);
+      const velocity = frame.reduced ? 0 : (frame.velocity ?? 0) * (frame.quality === "lite" ? 0.4 : 1);
       const regionTop = headerBottom + (mobile ? 14 : 24);
       const regionBottom = mobile ? copyTop - 18 : height - footerHeight - 40;
       const availableHeight = Math.max(80, regionBottom - regionTop);
       const verticalExtent = interpolate([4.3, 6.2, 4.1, 4.1], frame.phase);
-      const horizontalScale = mobile ? width / 8.65 : width / 13;
+      const horizontalScale = mobile ? width / 8.65 : width / interpolate([13, 13, 14, 15], frame.phase);
       const scale = Math.min(horizontalScale, availableHeight / verticalExtent, mobile ? 52 : 104);
-      const preferredCenter = mobile ? Math.min(258, Math.max(205, height * 0.34)) : height * 0.46;
+      const preferredCenter = mobile ? Math.min(258, Math.max(205, height * 0.34)) : height * interpolate(sceneCenterY, frame.phase);
       const halfExtent = scale * verticalExtent / 2;
       const arrival = smooth((world.arrival - 0.1) / 0.9);
       return {
-        yaw: interpolate([-0.4, -0.63, 0.28, -0.22], frame.phase) + frame.pointerX * 0.085 + (1 - arrival) * 0.2,
-        pitch: interpolate([-0.29, -0.43, -0.15, -0.2], frame.phase) + frame.pointerY * 0.055 - (1 - arrival) * 0.12,
-        separation: interpolate([0.33, 1.35, 0.25, 0.45], frame.phase),
-        cx: mix(world.focusX, width * (mobile ? 0.5 : 0.67), arrival),
+        yaw: interpolate([-0.4, -0.63, 0.28, -0.22], frame.phase) + frame.pointerX * 0.085 + (1 - arrival) * 0.2 + velocity * 0.04,
+        pitch: interpolate([-0.29, -0.43, -0.15, -0.2], frame.phase) + frame.pointerY * 0.055 - (1 - arrival) * 0.12 + energy * 0.025,
+        separation: interpolate([0.33, 1.35, 0.25, 0.45], frame.phase) * (1 + energy * 0.12),
+        cx: mix(world.focusX, width * (mobile ? 0.5 : interpolate(sceneCenterX, frame.phase)), arrival),
         cy: mix(world.focusY, clamp(preferredCenter, regionTop + halfExtent, regionBottom - halfExtent), arrival),
-        scale: scale * (0.14 + 0.86 * arrival),
+        scale: scale * (0.14 + 0.86 * arrival) * (1 - energy * 0.07),
       };
     }
 
@@ -412,7 +418,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     function updateInteractions(view: Camera, objectVisibility: number) {
       const scene = document.querySelector<HTMLElement>('.story-scene[data-active="true"]');
       const stage = Number(scene?.dataset.scene ?? Math.round(frame.phase));
-      const available = objectVisibility > 0.6 && Math.abs(frame.phase - stage) < 0.14;
+      const available = objectVisibility > 0.6 && Math.abs(frame.phase - stage) < 0.14 && (frame.intro ?? 1) >= 0.995;
       if (!available && interactions!.contains(document.activeElement)) {
         (document.activeElement as HTMLElement).blur();
         focusedItem = -1;
@@ -715,9 +721,11 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       const view = camera(world);
       const fraction = frame.phase - Math.floor(frame.phase);
       const reveal = fraction < 0.5 ? 1 : smooth((fraction - 0.72) / 0.28);
-      const objectVisibility = smooth((world.arrival - 0.28) / 0.72) * reveal;
+      const entrance = smooth(((frame.intro ?? 1) - 0.5) / 0.5);
+      const objectVisibility = smooth((world.arrival - 0.28) / 0.72) * reveal * entrance;
+      const energy = frame.reduced ? 0 : (frame.energy ?? 0) * (frame.quality === "lite" ? 0.4 : 1);
       const glow = drawing.createRadialGradient(view.cx, view.cy, 0, view.cx, view.cy, width * 0.58);
-      glow.addColorStop(0, "#0abab514");
+      glow.addColorStop(0, `rgba(10, 186, 181, ${0.078 + energy * 0.16})`);
       glow.addColorStop(1, "#0abab500");
       drawing.fillStyle = glow;
       drawing.fillRect(0, 0, width, height);
@@ -731,10 +739,13 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       if (symbolOpacity > 0) drawSymbols(view, symbolOpacity);
       drawing.restore();
       if (width >= 760) {
+        const rightCopy = smooth(frame.phase - 2);
         const shade = drawing.createLinearGradient(0, 0, width, 0);
-        shade.addColorStop(0, "#020708eb");
-        shade.addColorStop(0.34, "#020708b0");
+        shade.addColorStop(0, `rgba(2, 7, 8, ${0.92 * (1 - rightCopy)})`);
+        shade.addColorStop(0.34, `rgba(2, 7, 8, ${0.69 * (1 - rightCopy)})`);
         shade.addColorStop(0.52, "#02070800");
+        shade.addColorStop(0.68, `rgba(2, 7, 8, ${0.6 * rightCopy})`);
+        shade.addColorStop(1, `rgba(2, 7, 8, ${0.94 * rightCopy})`);
         drawing.fillStyle = shade;
         drawing.fillRect(0, 0, width, height);
       }
@@ -753,6 +764,8 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       element.dataset.focusX = world.focusX.toFixed(3);
       element.dataset.focusY = world.focusY.toFixed(3);
       element.dataset.renderQuality = frame.quality ?? "full";
+      element.dataset.motionEnergy = energy.toFixed(4);
+      element.dataset.introProgress = (frame.intro ?? 1).toFixed(4);
     }
 
     function updateFrame(event: Event) {
@@ -789,9 +802,13 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       height = bounds.height || innerHeight;
       headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 96;
       footerHeight = document.querySelector(".site-footer")?.getBoundingClientRect().height ?? 65;
-      const panel = document.querySelector(".scene-panel");
-      copyTop = panel ? parseFloat(getComputedStyle(panel).paddingTop) : 320;
-      copyRight = document.querySelector(".scene-copy-window")?.getBoundingClientRect().right ?? width * 0.38;
+      const scenes = Array.from(document.querySelectorAll<HTMLElement>(".story-scene"));
+      copyTops = scenes.map((scene) => parseFloat(getComputedStyle(scene.querySelector(".scene-panel")!).paddingTop));
+      copyRights = scenes.map((scene) => {
+        const bounds = scene.querySelector(".scene-copy-window")!.getBoundingClientRect();
+        const sceneX = parseFloat(scene.style.getPropertyValue("--scene-x")) || 0;
+        return bounds.right - sceneX;
+      });
       pixelRatio = Math.min(devicePixelRatio || 1, frame.quality === "lite" ? 1 : 1.5);
       surface.width = Math.round(width * pixelRatio);
       surface.height = Math.round(height * pixelRatio);
@@ -808,6 +825,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
 
     const observer = new ResizeObserver(scheduleResize);
     observer.observe(element);
+    document.querySelectorAll(".scene-copy-window, .site-header").forEach((node) => observer.observe(node));
     addEventListener(ELF_FRAME_EVENT, updateFrame);
     addEventListener("visibilitychange", scheduleResize);
     const buttonListeners = buttons.map((button, index) => {

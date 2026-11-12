@@ -10,6 +10,7 @@ import MotionController from "./MotionController";
 import ProjectConsole from "./ProjectConsole";
 import SignatureMark from "./SignatureMark";
 import GraphicsControl from "./GraphicsControl";
+import IntroSequence from "./IntroSequence";
 
 const SECTION_IDS = ["about", "projects", "achievements", "contact"] as const;
 const SAMPLE_LABELS = [".rodata", "sections", "trace", ".dynsym"];
@@ -42,6 +43,7 @@ export default function Portfolio({ locale }: { locale: Locale }) {
 
   return (
     <div id="portfolio" className="portfolio" data-locale={locale} data-graphics={graphics}>
+      <IntroSequence />
       <a className="skip-link" href="#main">{copy.skip}</a>
       <span id="top" className="top-anchor" aria-hidden="true" />
       <div className="reading-progress" aria-hidden="true" />

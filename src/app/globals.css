@@ -67,6 +67,7 @@ h1, h2, h3, p, figure { margin: 0; }
   font: 400 16px/2 var(--font-mono), monospace;
 }
 .elf-backdrop[data-ready="true"] .elf-fallback { display: none; }
+.portfolio:not([data-motion-ready="true"]) .elf-fallback { display: none; }
 .reading-progress {
   position: fixed;
   inset: 0 0 auto;
@@ -296,6 +297,27 @@ h1, h2, h3, p, figure { margin: 0; }
   .scene-intro { font-size: 14px; }
   .elf-symbols { gap: 4px 14px; }
   .elf-symbols button { font-size: 11px; }
+}
+@media (min-width: 760px) {
+  .about-scene .scene-panel { padding-top: clamp(128px, 15vh, 180px); }
+  .about-scene .scene-copy-window { width: 40%; max-width: 480px; }
+  .about-scene .identity-title { width: clamp(300px, 25vw, 360px); }
+  .about-scene .scene-intro { max-width: 35ch; font-size: clamp(16px, 1.18vw, 18px); }
+
+  .projects-scene .scene-panel { padding-top: clamp(156px, 25vh, 280px); }
+  .projects-scene .scene-copy-window { width: 38%; max-width: 460px; }
+
+  .achievements-scene .scene-panel { padding-top: clamp(150px, 18vh, 220px); }
+  .achievements-scene .scene-copy-window { width: 53%; max-width: 650px; }
+  .achievements-scene .scene-title { font-size: clamp(42px, 5.1vw, 80px); }
+  .achievements-scene .scene-intro { max-width: 41ch; font-size: clamp(15px, 1.1vw, 18px); }
+
+  .contact-scene .scene-panel { padding-top: clamp(188px, 30vh, 350px); padding-left: 55vw; }
+  .contact-scene .scene-copy-window { width: 100%; max-width: 500px; }
+  .contact-scene .scene-title { font-size: clamp(36px, 4.4vw, 72px); }
+  .contact-scene .scene-intro { max-width: 32ch; }
+  .portfolio:not([data-motion-ready="true"]) .scene-copy-window,
+  .portfolio[data-reduced-motion="true"] .scene-copy-window { width: 100%; }
 }
 @media (max-width: 759px) {
   :root { --gutter: 24px; --scene-safe-top: clamp(320px, 47svh, 410px); --scene-safe-bottom: 76px; }

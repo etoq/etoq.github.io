@@ -1,4 +1,4 @@
-import { elfInstructions, type ElfFrame } from "./elf";
+import { elfInstructions, sceneCenterX, sceneCenterY, type ElfFrame } from "./elf";
 
 type Instruction = { code: string; bytes: string; target?: string };
 type Listing = {
@@ -267,7 +267,8 @@ export function createAssemblyWorld() {
     context.moveTo(startX, startY);
     context.bezierCurveTo(controlX, startY + 110, controlX, endY - 110, endX, endY);
     context.lineWidth = mix(0.8, 1.4, active);
-    context.strokeStyle = `rgba(55, 187, 164, ${mix(0.28, 0.68, active)})`;
+    const energy = frame.reduced ? 0 : (frame.energy ?? 0) * (frame.quality === "lite" ? 0.4 : 1);
+    context.strokeStyle = `rgba(55, 187, 164, ${mix(0.28, 0.68, active) + energy * 0.15})`;
     context.stroke();
     context.setLineDash([mix(8, 24, active), 280]);
     context.lineDashOffset = frame.reduced ? 0 : -frame.time * mix(20, 42, active) - index * 53;
@@ -349,17 +350,21 @@ export function createAssemblyWorld() {
     const focusY = mix(from.y + listingHeight(from) / 2, to.y + listingHeight(to) / 2, blend);
     const travel = 4 * blend * (1 - blend);
     const arrival = 1 - 0.9 * travel;
-    const cameraX = focusX + travel * current.arc;
-    const cameraY = focusY - travel * 180;
-    const cameraZoom = mix(current.zoom, next.zoom, blend) * (1 - travel * 0.36);
-    const angle = mix(current.angle, next.angle, blend) + Math.sin(blend * Math.PI * 2) * 0.035;
+    const energy = frame.reduced ? 0 : (frame.energy ?? 0) * (frame.quality === "lite" ? 0.4 : 1);
+    const velocity = frame.reduced ? 0 : (frame.velocity ?? 0) * (frame.quality === "lite" ? 0.4 : 1);
+    const entrance = smooth(((frame.intro ?? 1) - 0.12) / 0.88);
+    const cameraX = focusX + travel * current.arc + velocity * 55;
+    const cameraY = focusY - travel * 180 + energy * 22;
+    const cameraZoom = mix(current.zoom, next.zoom, blend) * (1 - travel * 0.36) * (1 - energy * 0.1) * (0.62 + entrance * 0.38);
+    const angle = mix(current.angle, next.angle, blend) + Math.sin(blend * Math.PI * 2) * 0.035 + velocity * 0.018;
     const mobile = width < 760;
     const scale = (mobile ? clamp(width / 680, 0.43, 0.78) : clamp(width / 1600, 0.72, 1.16)) * cameraZoom;
     const pointerX = frame.reduced ? 0 : frame.pointerX * 16;
     const pointerY = frame.reduced ? 0 : frame.pointerY * 10;
-    const originX = width * (mobile ? 0.5 : 0.67) + pointerX;
-    const originY = height * (mobile ? 0.26 : 0.46) + pointerY;
+    const originX = width * (mobile ? 0.5 : mix(sceneCenterX[index], sceneCenterX[index + 1], blend)) + pointerX;
+    const originY = height * (mobile ? 0.26 : mix(sceneCenterY[index], sceneCenterY[index + 1], blend)) + pointerY;
     context.save();
+    context.globalAlpha *= 0.22 + entrance * 0.78;
     context.translate(originX, originY);
     context.rotate(angle);
     context.transform(1, -0.065, -0.12, 1, 0, 0);

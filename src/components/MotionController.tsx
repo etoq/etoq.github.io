@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { ELF_FRAME_EVENT, type ElfFrame } from "@/lib/elf";
+import { ELF_FRAME_EVENT, ELF_INTRO_DURATION, type ElfFrame } from "@/lib/elf";
 
 function clamp(value: number, minimum = 0, maximum = 1) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -58,6 +58,11 @@ export default function MotionController() {
     let targetPointerX = 0;
     let targetPointerY = 0;
     let consoleStartedAt = 0;
+    let scrollVelocity = 0;
+    let velocityTarget = 0;
+    let scrollEnergy = 0;
+    let lastScrollPosition = scrollY;
+    let lastScrollTime = performance.now();
     let disposed = false;
 
     function setStyle(element: HTMLElement, name: string, value: string) {
@@ -149,10 +154,19 @@ export default function MotionController() {
     }
 
     function paintCanvas() {
+      const introStarted = Number(root.dataset.introStarted);
+      const intro = !reduced && root.dataset.introState === "playing" && Number.isFinite(introStarted)
+        ? clamp((performance.now() - introStarted) / ELF_INTRO_DURATION)
+        : 1;
+      setStyle(root, "--intro-progress", intro.toFixed(4));
+      setStyle(root, "--intro-content-reveal", ease((intro - 0.62) / 0.38).toFixed(4));
       const detail: ElfFrame = {
         phase: canvasPosition, time: elapsed, pointerX, pointerY, reduced,
         selected: scenes.map((scene) => Number(scene.dataset.selected) || 0),
         quality: root.dataset.graphics === "lite" ? "lite" : "full",
+        velocity: reduced ? 0 : scrollVelocity,
+        energy: reduced ? 0 : scrollEnergy,
+        intro,
       };
       dispatchEvent(new CustomEvent<ElfFrame>(ELF_FRAME_EVENT, { detail }));
     }
@@ -170,6 +184,11 @@ export default function MotionController() {
       const delta = previousTime === null ? 1 / 60 : Math.min(0.1, Math.max(0, (timestamp - previousTime) / 1000));
       previousTime = timestamp;
       elapsed += delta;
+      const age = Math.max(0, timestamp - lastScrollTime) / 1000;
+      const desiredVelocity = reduced ? 0 : velocityTarget * Math.exp(-age * 7);
+      scrollVelocity += (desiredVelocity - scrollVelocity) * (1 - Math.exp(-delta * 9));
+      if (Math.abs(scrollVelocity) < 0.002) scrollVelocity = 0;
+      scrollEnergy = Math.min(1, Math.abs(scrollVelocity));
       const damping = reduced ? 1 : 1 - Math.exp(-delta * 12);
       const difference = targetScroll - renderedScroll;
       renderedScroll = Math.abs(difference) > 0.1 ? renderedScroll + difference * damping : targetScroll;
@@ -178,14 +197,25 @@ export default function MotionController() {
       const lite = root.dataset.graphics === "lite";
       if (reduced || lite) pointerX = pointerY = 0;
       if (dirty || Math.abs(difference) > 0.1) renderScroll();
-      canvasPosition = reduced ? canvasTarget : canvasPosition + (canvasTarget - canvasPosition) * damping;
+      const cameraDamping = reduced ? 1 : 1 - Math.exp(-delta * (12 - scrollEnergy * 4));
+      canvasPosition = reduced ? canvasTarget : canvasPosition + (canvasTarget - canvasPosition) * cameraDamping;
       renderConsole();
       if (reduced || timestamp - lastPaint >= (lite ? 48 : 32)) { paintCanvas(); lastPaint = timestamp; }
       if (!reduced || Math.abs(difference) > 0.1) requestFrame();
       else previousTime = null;
     }
 
-    function onScroll() { targetScroll = scrollY; dirty = true; requestFrame(); }
+    function onScroll() {
+      const now = performance.now();
+      const distance = scrollY - lastScrollPosition;
+      const interval = Math.min(120, Math.max(16, now - lastScrollTime)) / 1000;
+      velocityTarget = clamp(distance / Math.max(1, innerHeight) / interval / 2.5, -1, 1);
+      lastScrollPosition = scrollY;
+      lastScrollTime = now;
+      targetScroll = scrollY;
+      dirty = true;
+      requestFrame();
+    }
     function resetPointer() { targetPointerX = targetPointerY = 0; requestFrame(); }
     function onPointerMove(event: PointerEvent) {
       if (reduced || root.dataset.graphics === "lite" || !pointerQuery.matches) return;
@@ -227,6 +257,7 @@ export default function MotionController() {
     }
     function onReducedMotion(event: MediaQueryListEvent) {
       reduced = event.matches;
+      scrollVelocity = velocityTarget = scrollEnergy = 0;
       root.dataset.reducedMotion = String(reduced);
       previousTime = null;
       resetPointer();
@@ -237,7 +268,11 @@ export default function MotionController() {
       if (document.hidden) {
         if (frameId !== null) cancelAnimationFrame(frameId);
         frameId = null; previousTime = null;
-      } else onScroll();
+      } else {
+        scrollVelocity = velocityTarget = scrollEnergy = 0;
+        lastScrollPosition = scrollY;
+        onScroll();
+      }
     }
     function onConsoleToggle() { consoleStartedAt = elapsed; scheduleLayout(); requestFrame(); }
     function onHashChange() {
@@ -281,7 +316,7 @@ export default function MotionController() {
       lastPaint = -Infinity;
       requestFrame();
     });
-    selectionObserver.observe(root, { subtree: true, attributes: true, attributeFilter: ["data-selected", "data-graphics"] });
+    selectionObserver.observe(root, { subtree: true, attributes: true, attributeFilter: ["data-selected", "data-graphics", "data-intro-state"] });
     addEventListener("scroll", onScroll, { passive: true });
     addEventListener("resize", scheduleLayout, { passive: true });
     addEventListener("pointermove", onPointerMove, { passive: true });

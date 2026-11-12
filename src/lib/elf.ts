@@ -1,4 +1,7 @@
 export type GraphicsQuality = "full" | "lite";
+export const ELF_INTRO_DURATION = 1800;
+export const sceneCenterX = [0.68, 0.70, 0.72, 0.29] as const;
+export const sceneCenterY = [0.48, 0.44, 0.58, 0.46] as const;
 
 export type ElfFrame = {
   phase: number;
@@ -8,6 +11,9 @@ export type ElfFrame = {
   reduced: boolean;
   selected: readonly number[];
   quality?: GraphicsQuality;
+  velocity?: number;
+  energy?: number;
+  intro?: number;
 };
 
 export const ELF_FRAME_EVENT = "eto:elf-frame";
