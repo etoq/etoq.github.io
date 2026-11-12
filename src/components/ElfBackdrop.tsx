@@ -331,8 +331,18 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       return mix(base, -1.5 * view.separation - 0.38, focusWeight(index));
     }
 
+    function planeOffset(index: number) {
+      return (index - 1.5) * 0.13 * smooth(1 - Math.abs(frame.phase - 1));
+    }
+
+    function planeCorners(index: number, view: Camera): Point[] {
+      const x = planeOffset(index);
+      const z = planeZ(index, view);
+      return [[-3 + x, -1.66, z], [3 + x, -1.66, z], [3 + x, 1.66, z], [-3 + x, 1.66, z]];
+    }
+
     function profileCorners(index: number, view: Camera): Point[] {
-      const left = -3 + (22 + index * 215) / 720 * 6;
+      const left = -3 + planeOffset(2) + (22 + index * 215) / 720 * 6;
       const right = left + 210 / 720 * 6;
       const top = -1.66 + 181 / 400 * 3.32;
       const bottom = top + 70 / 400 * 3.32;
@@ -382,7 +392,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         const y = mobile ? copyTop - 34 : Math.min(height - footerHeight - 38, view.cy + view.scale * 3.5);
         return [0, 1, 2].map((index) => ({
           x: start + index * (targetWidth + gap), y: y - 22, width: targetWidth, height: 44,
-          point: project([-2.65, -1.45, planeZ(index + 1, view)], view),
+          point: project([-2.65 + planeOffset(index + 1), -1.45, planeZ(index + 1, view)], view),
         }));
       }
       if (stage === 2) {
@@ -446,8 +456,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         polygon(corners, view, "#0abab51a", "#b0ffec");
       }
       if (stage === 1) {
-        const z = planeZ(preview + 1, view);
-        const corners: Point[] = [[-3, -1.66, z], [3, -1.66, z], [3, 1.66, z], [-3, 1.66, z]];
+        const corners = planeCorners(preview + 1, view);
         drawRectangleGlow(corners, view, materialGlow);
         polygon(corners, view, "#0abab508", "#9cf5e6a8");
       }
@@ -475,16 +484,14 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     }
 
     function drawPlanes(view: Camera, opacity: number) {
-      const planes = planeNames.map((name, index) => {
+      const planes = planeNames.map((_, index) => {
         const z = planeZ(index, view);
-        const offset = (index - 1.5) * 0.13 * smooth(1 - Math.abs(frame.phase - 1));
-        return { index, name, z, offset, depth: project([0, 0, z], view).z };
+        return { index, depth: project([0, 0, z], view).z };
       }).sort((first, second) => second.depth - first.depth);
       drawing.save();
       drawing.globalAlpha *= opacity;
       for (const plane of planes) {
-        const x = plane.offset;
-        const corners: Point[] = [[-3 + x, -1.66, plane.z], [3 + x, -1.66, plane.z], [3 + x, 1.66, plane.z], [-3 + x, 1.66, plane.z]];
+        const corners = planeCorners(plane.index, view);
         const origin = project(corners[0], view);
         const horizontal = project(corners[1], view);
         const vertical = project(corners[3], view);
@@ -551,8 +558,9 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       drawing.globalAlpha *= opacity;
       const index = selection[1];
       const z = planeZ(index + 1, view);
-      const end: Point = [3.4, 0.7 - index * 0.6, z];
-      path([[2.8, end[1], z], end], view, "#9cf5e6");
+      const x = planeOffset(index + 1);
+      const end: Point = [3.4 + x, 0.7 - index * 0.6, z];
+      path([[2.8 + x, end[1], z], end], view, "#9cf5e6");
       const point = project(end, view);
       const name = materialNames[index];
       drawing.fillStyle = "#c7ffec";
