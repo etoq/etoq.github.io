@@ -101,7 +101,7 @@ export default function MotionController() {
       dirty = true;
       requestFrame();
       queueMicrotask(() => {
-        if (document.activeElement instanceof HTMLElement) ensureFocusVisible(document.activeElement, true);
+        if (document.activeElement instanceof HTMLElement) ensureFocusVisible(document.activeElement);
       });
     }
 
@@ -115,10 +115,7 @@ export default function MotionController() {
       let stage = 0;
       metrics.forEach((metric, index) => { if (renderedScroll >= metric.start) stage = index; });
       const fraction = clamp((renderedScroll - metrics[stage].start) / metrics[stage].distance);
-      const cameraProgress = overflow[stage] > 0
-        ? 0.12 * ease(fraction / 0.67) + 0.88 * ease((fraction - 0.67) / 0.33)
-        : fraction;
-      canvasTarget = reduced ? stage : Math.min(scenes.length - 1, stage + cameraProgress);
+      canvasTarget = reduced ? stage : Math.min(scenes.length - 1, stage + fraction);
       phase = reduced ? stage : Math.min(scenes.length - 1, stage + ease((fraction - 0.72) / 0.28));
       const dominant = Math.round(phase);
       const focusedScene = scenes.find((scene) => scene.contains(document.activeElement));
@@ -152,17 +149,10 @@ export default function MotionController() {
     }
 
     function paintCanvas() {
-      const traceStep = Number(root.dataset.traceStep ?? -1);
       const detail: ElfFrame = {
         phase: canvasPosition, time: elapsed, pointerX, pointerY, reduced,
         selected: scenes.map((scene) => Number(scene.dataset.selected) || 0),
         quality: root.dataset.graphics === "lite" ? "lite" : "full",
-        lab: {
-          xref: Number(root.dataset.xref) || 0,
-          xrefPulse: Number(root.dataset.xrefPulse) || 0,
-          traceStep: Number.isFinite(traceStep) ? traceStep : -1,
-          yaraPulse: Number(root.dataset.yaraPulse) || 0,
-        },
       };
       dispatchEvent(new CustomEvent<ElfFrame>(ELF_FRAME_EVENT, { detail }));
     }
@@ -256,7 +246,7 @@ export default function MotionController() {
       if (id === "learning" && consolePanel) consolePanel.open = true;
       if (index >= 0) goTo(index, false);
     }
-    function ensureFocusVisible(targetElement: HTMLElement, includeInteraction = false) {
+    function ensureFocusVisible(targetElement: HTMLElement) {
       if (disposed || reduced) return;
       const content = targetElement.closest<HTMLElement>(".scene-content");
       const index = content ? contents.indexOf(content) : -1;
@@ -269,14 +259,10 @@ export default function MotionController() {
       const windowElement = windows[index];
       windowElement.scrollTop = 0;
       const area = windowElement.getBoundingClientRect();
-      const groupBounds = includeInteraction ? targetElement.closest(".lab-trace, .lab-yara")?.getBoundingClientRect() : null;
-      const showGroup = groupBounds && groupBounds.height <= area.height - 12;
-      const target = showGroup ? groupBounds : targetElement.getBoundingClientRect();
-      const topInset = showGroup ? 6 : 8;
-      const bottomInset = showGroup ? 6 : 24;
+      const target = targetElement.getBoundingClientRect();
       let pan = parseFloat(scenes[index].style.getPropertyValue("--content-pan")) || 0;
-      if (target.top < area.top + topInset) pan += target.top - area.top - topInset;
-      else if (target.bottom > area.bottom - bottomInset) pan += target.bottom - area.bottom + bottomInset;
+      if (target.top < area.top + 8) pan += target.top - area.top - 8;
+      else if (target.bottom > area.bottom - 24) pan += target.bottom - area.bottom + 24;
       else return;
       const fraction = inverseEase(clamp(pan / overflow[index])) * 0.67;
       scrollTo({ top: metrics[index].start + fraction * metrics[index].distance, behavior: "instant" });
@@ -290,17 +276,12 @@ export default function MotionController() {
 
     const resizeObserver = new ResizeObserver(scheduleLayout);
     contents.forEach((element) => resizeObserver.observe(element));
-    const selectionObserver = new MutationObserver((changes) => {
+    const selectionObserver = new MutationObserver(() => {
       if (root.dataset.graphics === "lite") resetPointer();
       lastPaint = -Infinity;
       requestFrame();
-      if (changes.some((change) => change.target === root && ["data-trace-step", "data-yara-pulse"].includes(change.attributeName ?? ""))) scheduleLayout();
     });
-    selectionObserver.observe(root, {
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-selected", "data-graphics", "data-xref", "data-xref-pulse", "data-trace-step", "data-yara-pulse"],
-    });
+    selectionObserver.observe(root, { subtree: true, attributes: true, attributeFilter: ["data-selected", "data-graphics"] });
     addEventListener("scroll", onScroll, { passive: true });
     addEventListener("resize", scheduleLayout, { passive: true });
     addEventListener("pointermove", onPointerMove, { passive: true });

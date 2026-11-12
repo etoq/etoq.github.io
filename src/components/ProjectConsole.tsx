@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { content, type Locale, type Project } from "@/lib/content";
-import { encodedBytes, elfInstructions, elfXrefs, elfYaraRule, getTraceState, scanElfSample, traceStepCount, type ElfLabState } from "@/lib/elf";
-import "./research-console.css";
+import { elfInstructions } from "@/lib/elf";
 
 const materials = [
   {
@@ -24,8 +23,8 @@ const materials = [
   {
     file: "rule.yar",
     section: ".data",
-    command: "yara -s rule.yar eto.elf",
-    lines: elfYaraRule.split("\n"),
+    command: "readelf -x .data eto.elf",
+    lines: ["0x00403000  ad bc a7", "", "XOR 0xc8   65 74 6f  \"eto\""],
   },
 ] as const;
 
@@ -34,35 +33,19 @@ function reveal(value: number) {
   return bounded * bounded * (3 - 2 * bounded);
 }
 
-function hex(value: number, digits = 8) {
-  return `0x${value.toString(16).padStart(digits, "0")}`;
-}
-
 export default function ProjectConsole({
   locale,
   selected,
   onSelect,
   projects,
-  lab,
-  onXref,
-  onTraceStep,
-  onYaraScan,
 }: {
   locale: Locale;
   selected: number;
   onSelect: (item: number) => void;
   projects: Project[];
-  lab: ElfLabState;
-  onXref: (index: number) => void;
-  onTraceStep: (step: number) => void;
-  onYaraScan: () => void;
 }) {
   const copy = content[locale];
-  const russian = locale === "ru";
   const activeMaterial = materials[Math.max(0, Math.min(materials.length - 1, selected))];
-  const trace = getTraceState(lab.traceStep);
-  const activeXref = elfXrefs[Math.max(0, Math.min(elfXrefs.length - 1, lab.xref))];
-  const scan = useMemo(() => lab.yaraPulse > 0 ? scanElfSample() : null, [lab.yaraPulse]);
   const hostRef = useRef<HTMLElement>(null);
   const commandRef = useRef<HTMLSpanElement>(null);
   const lineRefs = useRef<Array<HTMLSpanElement | null>>([]);
@@ -99,8 +82,7 @@ export default function ProjectConsole({
       const typedLength = Math.floor(Math.min(1, progress / 0.46) * activeMaterial.command.length);
       command!.textContent = activeMaterial.command.slice(0, typedLength);
       lineRefs.current.forEach((line, index) => {
-        const delay = activeMaterial.lines.length > 1 ? index / (activeMaterial.lines.length - 1) * 0.38 : 0;
-        line?.style.setProperty("--terminal-line-reveal", reveal((progress - 0.38 - delay) / 0.24).toFixed(4));
+        line?.style.setProperty("--terminal-line-reveal", reveal((progress - 0.38 - index * 0.12) / 0.24).toFixed(4));
       });
       if (progress < 1) frame = requestAnimationFrame(animate);
       else complete();
@@ -168,79 +150,12 @@ export default function ProjectConsole({
         </p>
         <div className="project-console-surface">
           <span className="project-console-section" aria-live="polite">{activeMaterial.section}</span>
-          {selected === 1 ? (
-            <div className="lab-xrefs" role="group" aria-label={russian ? "Перекрёстные ссылки строк" : "String cross-references"}>
-              {elfXrefs.map((xref, index) => (
-                <button className="lab-xref" type="button" key={xref.name} data-xref-index={index} aria-pressed={lab.xref === index} onClick={() => onXref(index)}>
-                  <span className="project-console-line lab-xref-row" ref={(element) => { lineRefs.current[index] = element; }}>
-                    <span>{xref.name}</span><code>{hex(xref.address)}</code>
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <pre className={`project-console-output${selected === 2 ? " lab-rule" : ""}`} aria-label={selected === 2 ? (russian ? "Правило YARA для eto.elf" : "YARA rule for eto.elf") : (russian ? "Фрагмент схемы ELF" : "ELF schematic excerpt")}>
-              <code>{activeMaterial.lines.map((line, index) => (
-                <span className="project-console-line" key={`${activeMaterial.section}-${index}`} ref={(element) => { lineRefs.current[index] = element; }}>{line || " "}</span>
-              ))}</code>
-            </pre>
-          )}
+          <pre className="project-console-output" aria-label={locale === "ru" ? "Фрагмент схемы ELF" : "ELF schematic excerpt"}>
+            <code>{activeMaterial.lines.map((line, index) => (
+              <span className="project-console-line" key={`${activeMaterial.section}-${index}`} ref={(element) => { lineRefs.current[index] = element; }}>{line || " "}</span>
+            ))}</code>
+          </pre>
         </div>
-        {selected === 0 && (
-          <div className="lab-trace" data-trace-step={trace.step}>
-            <div className="lab-toolbar">
-              <p>{russian ? "Пошагово" : "Single step"}<span className="lab-step-count">{trace.step} / {traceStepCount}</span></p>
-              <div className="lab-controls">
-                <button className="lab-step" type="button" disabled={trace.returned} onClick={() => onTraceStep(Math.min(traceStepCount, trace.step + 1))}>{russian ? "Шаг" : "Step"}</button>
-                <button className="lab-reset" type="button" onClick={() => onTraceStep(-1)}>{russian ? "Сброс" : "Reset"}</button>
-              </div>
-            </div>
-            <dl className="lab-registers" aria-label={russian ? "Регистры" : "Registers"}>
-              <div><dt>RIP</dt><dd key={`rip-${trace.rip}`}>{trace.rip === null ? "ret" : hex(trace.rip)}</dd></div>
-              <div><dt>RDI</dt><dd key={`rdi-${trace.rdi}`}>{hex(trace.rdi)}</dd></div>
-              <div><dt>ECX</dt><dd key={`ecx-${trace.ecx}`}>{hex(trace.ecx)}</dd></div>
-              <div><dt>ZF</dt><dd key={`zf-${trace.zf}`}>{Number(trace.zf)}</dd></div>
-            </dl>
-            <div className="lab-memory" aria-label={russian ? "Память по адресу 0x00403000" : "Memory at 0x00403000"}>
-              <code className="lab-memory-address">0x00403000</code>
-              <div className="lab-memory-bytes">
-                {trace.memory.map((byte, index) => (
-                  <span className="lab-byte" key={`${index}-${byte}`} data-decoded={byte !== encodedBytes[index]} data-pointer={trace.rdi === 0x403000 + index}>
-                    <code>{byte.toString(16).padStart(2, "0")}</code><span>{byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : "·"}</span>
-                  </span>
-                ))}
-              </div>
-            </div>
-            <p className="lab-trace-position" aria-live="polite">
-              <span>{trace.lastRow === null ? (russian ? "Следующая" : "Next") : (russian ? "Выполнено" : "Executed")}</span>
-              <code>{elfInstructions[trace.lastRow ?? trace.nextRow ?? 0].code}</code>
-            </p>
-          </div>
-        )}
-        {selected === 1 && (
-          <div className="lab-reference" key={`xref-${lab.xrefPulse}`} aria-live="polite">
-            <p className="lab-reference-addresses"><code>{hex(activeXref.address)}</code><span aria-hidden="true">←</span><code>{hex(activeXref.instructionAddress)}</code></p>
-            <p className="lab-reference-instruction"><span>.text</span><code>{activeXref.instruction}</code></p>
-          </div>
-        )}
-        {selected === 2 && (
-          <div className="lab-yara" data-scan-state={scan ? (scan.matched ? "matched" : "clear") : "idle"}>
-            <div className="lab-toolbar">
-              <code>eto.elf</code>
-              <button className="lab-scan" type="button" onClick={onYaraScan}>{russian ? "Проверить образец" : "Scan sample"}</button>
-            </div>
-            <div className="lab-scan-result" key={`scan-${lab.yaraPulse}`} role="status">
-              {scan ? (
-                <>
-                  <p className="lab-match-title">{scan.matched ? scan.rule : (russian ? "Совпадений нет" : "No matches")}</p>
-                  {scan.offsets.map((offset) => <p className="lab-match-offset" key={offset}><code>{hex(offset, 6)}</code><code>$encoded</code><code>{encodedBytes.map((byte) => byte.toString(16).padStart(2, "0")).join(" ")}</code></p>)}
-                  {scan.matched && <p className="lab-match-count">{russian ? `Совпадений ${scan.offsets.length}` : `Matches ${scan.offsets.length}`}</p>}
-                </>
-              ) : <p className="lab-scan-idle">{russian ? "Встроенная проверка сигнатуры ELF и последовательности байтов." : "Built-in check of the ELF signature and byte sequence."}</p>}
-            </div>
-          </div>
-        )}
-        <noscript><p className="lab-script-note">{russian ? "Для взаимодействия с образцом нужен JavaScript." : "Sample interaction requires JavaScript."}</p></noscript>
         <div className="project-console-projects">
           <p className="project-console-directory">./projects</p>
           {projects.length ? projects.map((project) => (

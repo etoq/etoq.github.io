@@ -156,7 +156,7 @@ h1, h2, h3, p, figure { margin: 0; }
 .signature-beam { animation: signature-sweep 6.8s linear infinite; }
 .signature-ground { filter: drop-shadow(0 0 9px #0abab580); }
 .elf-interactions { position: absolute; inset: 0; pointer-events: none; }
-.elf-hit-target, .elf-xref-target {
+.elf-hit-target {
   position: absolute;
   min-width: 44px;
   min-height: 44px;
@@ -171,8 +171,6 @@ h1, h2, h3, p, figure { margin: 0; }
 }
 .elf-hit-target[data-label-visible="true"]:hover, .elf-hit-target[data-label-visible="true"]:focus-visible { border-color: #9cf5e680; background: #0abab51a; box-shadow: 0 0 25px #0abab51c; }
 .elf-hit-target[data-label-visible="false"]:focus-visible { outline: none; }
-.elf-xref-target:focus-visible { outline: none; }
-.elf-xref-interactions { position: absolute; inset: 0; pointer-events: none; }
 .elf-hit-target[data-label-visible="true"] { background: #04100ff2; border-color: #315b50; }
 .elf-hit-target[data-label-visible="true"][aria-pressed="true"] { border-color: var(--tiffany); background: #08231f; }
 .elf-hit-label { display: block; padding: 8px 6px; font: 400 11px/1.6 var(--font-mono), monospace; white-space: nowrap; }
