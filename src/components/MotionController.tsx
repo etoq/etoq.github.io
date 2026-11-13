@@ -117,6 +117,10 @@ export default function MotionController({ onRestore }: { onRestore: (state: Sce
       if (urlTimer !== null) clearTimeout(urlTimer);
       urlTimer = null;
       if (disposed || localeTimer !== null) return;
+      if (navigationTarget !== null && Math.abs(position() - navigationTarget) > 0.002) {
+        scheduleUrl();
+        return;
+      }
       const state = snapshot();
       writeState(state, navigating || state.section === historySection ? "replace" : "push");
       navigating = false;
@@ -162,6 +166,8 @@ export default function MotionController({ onRestore }: { onRestore: (state: Sce
       if (restoredProgress !== null && performance.now() < restoreUntil) {
         const stage = Math.min(scenes.length - 1, Math.floor(restoredProgress));
         scrollTo({ top: metrics[stage].start + (restoredProgress - stage) * metrics[stage].distance, behavior: "instant" });
+      } else if (navigationTarget !== null) {
+        scrollTo({ top: metrics[navigationTarget].start, behavior: reduced ? "instant" : "smooth" });
       } else if (previousMetric && !reduced) {
         const nextOverflow = overflow[previousStage];
         const preservePan = previousOverflow !== nextOverflow && fraction < 0.72;
@@ -296,6 +302,7 @@ export default function MotionController({ onRestore }: { onRestore: (state: Sce
       const section = clamp(index, 0, scenes.length - 1);
       const target = scenes[section];
       restoredProgress = null;
+      navigationTarget = null;
       if (updateHistory) {
         const state = snapshot();
         writeState(state, "replace");
@@ -408,7 +415,10 @@ export default function MotionController({ onRestore }: { onRestore: (state: Sce
 
     function onNavigationInput() {
       restoredProgress = null;
-      if (navigating) syncUrl();
+      if (navigating) {
+        navigationTarget = null;
+        syncUrl();
+      }
     }
     function ensureFocusVisible(targetElement: HTMLElement) {
       if (disposed || reduced) return;
