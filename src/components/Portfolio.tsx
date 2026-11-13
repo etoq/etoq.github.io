@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { content, elfContent, publicData, type Locale } from "@/lib/content";
-import { localPath } from "@/lib/config";
+import { absoluteUrl, localPath } from "@/lib/config";
 import type { GraphicsQuality } from "@/lib/elf";
+import { SECTION_IDS, type SceneState } from "@/lib/scene-state";
 import ElfBackdrop from "./ElfBackdrop";
 import AnalysisConsole from "./AnalysisConsole";
 import MotionController from "./MotionController";
@@ -12,10 +13,10 @@ import SignatureMark from "./SignatureMark";
 import GraphicsControl from "./GraphicsControl";
 import IntroSequence from "./IntroSequence";
 
-const SECTION_IDS = ["about", "projects", "achievements", "contact"] as const;
 const SAMPLE_LABELS = [".rodata", "sections", "trace", ".dynsym"];
 
-export default function Portfolio({ locale }: { locale: Locale }) {
+export default function Portfolio({ locale: initialLocale }: { locale: Locale }) {
+  const [locale, setLocale] = useState(initialLocale);
   const copy = content[locale];
   const sceneCopy = elfContent[locale];
   const [selected, setSelected] = useState([0, 0, 0, 0]);
@@ -40,6 +41,23 @@ export default function Portfolio({ locale }: { locale: Locale }) {
       : previous.map((value, index) => index === scene ? item : value));
   }, []);
   const selectProject = useCallback((item: number) => selectItem(1, item), [selectItem]);
+  const restoreState = useCallback((state: SceneState) => {
+    setLocale(state.locale);
+    setSelected(state.selected);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    document.title = content[locale].metadata.title;
+    document.querySelector('meta[name="description"]')?.setAttribute("content", content[locale].metadata.description);
+    document.querySelector('meta[property="og:description"]')?.setAttribute("content", content[locale].metadata.description);
+    document.querySelector('meta[name="twitter:description"]')?.setAttribute("content", content[locale].metadata.description);
+    document.querySelector('meta[property="og:locale"]')?.setAttribute("content", locale === "ru" ? "ru_RU" : "en_US");
+    document.querySelector('meta[property="og:locale:alternate"]')?.setAttribute("content", locale === "ru" ? "en_US" : "ru_RU");
+    const canonical = absoluteUrl(locale === "ru" ? "/" : "/en/");
+    document.querySelector('link[rel="canonical"]')?.setAttribute("href", canonical);
+    document.querySelector('meta[property="og:url"]')?.setAttribute("content", canonical);
+  }, [locale]);
 
   return (
     <div id="portfolio" className="portfolio" data-locale={locale} data-graphics={graphics}>
@@ -104,13 +122,13 @@ export default function Portfolio({ locale }: { locale: Locale }) {
           </section>
         ))}
       </main>
-      <ElfBackdrop onSelect={selectItem} />
+      <ElfBackdrop locale={locale} onSelect={selectItem} />
       <footer className="site-footer">
         <span>{sceneCopy.sampleLabel}</span>
         <span className="sample-location" aria-hidden="true">eto.elf / <span data-sample-location>{SAMPLE_LABELS[0]}</span></span>
         <a href="#about">{copy.top}</a>
       </footer>
-      <MotionController />
+      <MotionController onRestore={restoreState} />
     </div>
   );
 }

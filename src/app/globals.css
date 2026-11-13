@@ -147,6 +147,10 @@ h1, h2, h3, p, figure { margin: 0; }
 .scene-panel { padding: var(--scene-safe-top) var(--gutter) var(--scene-safe-bottom); }
 .scene-copy-window { width: 38%; max-width: 450px; pointer-events: auto; }
 .scene-content { overflow-wrap: anywhere; }
+.scene-content, .site-header nav, .site-footer { transition: opacity 220ms ease; }
+.portfolio[data-language-transition="out"] .scene-content,
+.portfolio[data-language-transition="out"] .site-header nav,
+.portfolio[data-language-transition="out"] .site-footer { opacity: .12; transition-duration: 120ms; }
 .elf-operation { margin-bottom: 20px; color: #79b8a2; font: 400 11px/1.6 var(--font-mono), monospace; }
 .scene-title { margin-bottom: 24px; font-size: clamp(32px, 3.7vw, 62px); font-weight: 500; line-height: 1.12; letter-spacing: -.055em; }
 .identity-title { width: clamp(220px, 19.5vw, 300px); max-width: 100%; line-height: 0; }

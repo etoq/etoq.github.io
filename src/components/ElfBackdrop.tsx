@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { ELF_FRAME_EVENT, elfInstructions, sceneCenterX, sceneCenterY, type ElfFrame } from "@/lib/elf";
 import { createAssemblyWorld } from "@/lib/assembly-world";
+import type { Locale } from "@/lib/content";
 
 type Point = readonly [number, number, number];
 type ScreenPoint = { x: number; y: number; z: number };
@@ -21,6 +22,18 @@ type RectangleGlow = { image: HTMLCanvasElement; width: number; height: number; 
 const planeNames = ["ELF header", ".text", ".rodata", ".data"];
 const materialNames = ["analyze.py", "notes.md", "rule.yar"];
 const profileNames = ["linux", "reverse", "ctf"];
+const localizedNames = {
+  ru: {
+    channels: ["GitHub", "Почта", "Telegram"],
+    achievements: ["CTF", "Исследование", "Публикация"],
+    groups: ["Обо мне в схеме ELF", "Материалы образца", "Точки останова достижений", "Символы контактов"],
+  },
+  en: {
+    channels: ["GitHub", "Email", "Telegram"],
+    achievements: ["CTF", "Research", "Publication"],
+    groups: ["About me in the ELF scene", "Sample materials", "Achievement breakpoints", "Contact symbols"],
+  },
+};
 const stopRows = [2, 5, 6];
 const decoderSteps = [0, 1, 2, 3, 4, 5, 2, 3, 4, 5, 2, 3, 4, 5, 6];
 const initialFrame: ElfFrame = {
@@ -63,13 +76,15 @@ function spaceRows(positions: number[], minimumGap: number) {
   return spaced.map((position) => position + shift);
 }
 
-export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, item: number) => void }) {
+export default function ElfBackdrop({ locale, onSelect }: { locale: Locale; onSelect?: (scene: number, item: number) => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const interactionRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const onSelectRef = useRef(onSelect);
+  const localeRef = useRef(locale);
   onSelectRef.current = onSelect;
+  localeRef.current = locale;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -84,13 +99,6 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     if (!interactions || buttons.length !== 3) return;
     const textures: HTMLCanvasElement[] = [];
     const assemblyWorld = createAssemblyWorld();
-    const locale = document.documentElement.lang;
-    const channelNames = locale === "ru" ? ["GitHub", "Почта", "Telegram"] : ["GitHub", "Email", "Telegram"];
-    const achievementNames = locale === "ru" ? ["CTF", "Исследование", "Публикация"] : ["CTF", "Research", "Publication"];
-    const interactionNames = [profileNames, [".text", ".rodata", ".data"], achievementNames, channelNames];
-    const groupNames = locale === "ru"
-      ? ["Обо мне в схеме ELF", "Материалы образца", "Точки останова достижений", "Символы контактов"]
-      : ["About me in the ELF scene", "Sample materials", "Achievement breakpoints", "Contact symbols"];
     const styleCache = new WeakMap<HTMLElement, Map<string, string>>();
 
     let frame = initialFrame;
@@ -422,6 +430,8 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     }
 
     function updateInteractions(view: Camera, objectVisibility: number) {
+      const names = localizedNames[localeRef.current];
+      const interactionNames = [profileNames, [".text", ".rodata", ".data"], names.achievements, names.channels];
       const scene = document.querySelector<HTMLElement>('.story-scene[data-active="true"]');
       const stage = Number(scene?.dataset.scene ?? Math.round(frame.phase));
       const available = objectVisibility > 0.6 && Math.abs(frame.phase - stage) < 0.14 && (frame.intro ?? 1) >= 0.995;
@@ -433,7 +443,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       interactions!.dataset.elfScene = String(stage);
       element.dataset.interactionStage = available ? String(stage) : "";
       if (!available) { hoveredItem = -1; return; }
-      interactions!.setAttribute("aria-label", groupNames[stage]);
+      interactions!.setAttribute("aria-label", names.groups[stage]);
       const targets = hitTargets(view, stage);
       buttons.forEach((button, index) => {
         const target = targets[index];
@@ -483,7 +493,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
         drawing.stroke();
         drawing.fillStyle = "#b0ffec";
         drawing.font = `400 11px ${mono}`;
-        const label = achievementNames[preview];
+        const label = names.achievements[preview];
         drawing.fillText(label, clamp(target.point.x + 14, 16, width - drawing.measureText(label).width - 16), target.point.y - 12);
       }
       if (stage === 3) {
@@ -670,6 +680,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     }
 
     function drawSymbols(view: Camera, opacity: number) {
+      const channelNames = localizedNames[localeRef.current].channels;
       drawing.save();
       drawing.globalAlpha *= opacity;
       const selected = selection[3];

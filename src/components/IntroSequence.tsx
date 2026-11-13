@@ -36,7 +36,8 @@ export default function IntroSequence() {
     const motionQuery = matchMedia("(prefers-reduced-motion: reduce)");
     const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
     const aboutEntry = ["", "#about", "#top", "#main"].includes(location.hash);
-    const eligible = aboutEntry && scrollY <= 32 && !motionQuery.matches
+    const savedPosition = Number(new URLSearchParams(location.search).get("p")) > 0;
+    const eligible = aboutEntry && !savedPosition && scrollY <= 32 && !motionQuery.matches
       && !document.hidden && navigation?.type !== "back_forward";
     if (!eligible) {
       root.dataset.introState = "complete";
