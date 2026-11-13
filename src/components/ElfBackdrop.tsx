@@ -102,6 +102,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     let copyRight = 0;
     let copyTops = [320, 320, 320, 320];
     let copyRights = [0, 0, 0, 0];
+    let compactTrace = false;
     let pixelRatio = 1;
     let mono = "monospace";
     let disposed = false;
@@ -358,11 +359,16 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     }
 
     function traceMarkers(view: Camera) {
-      const z = planeZ(1, view) - 0.025;
+      const z = planeZ(1, view);
       const minimumX = width < 760 ? 24 : copyRight + 26;
-      const sources = stopRows.map((row) => project([-3.22, instructionY(row), z], view));
+      const sources = stopRows.map((row) => project([-3.22 + planeOffset(1), instructionY(row), z], view));
       const positions = spaceRows(sources.map((source) => source.y), 46);
-      return sources.map((source, index) => ({ source, x: Math.max(minimumX, source.x), y: positions[index] }));
+      return sources.map((source, index) => ({
+        source,
+        x: Math.max(minimumX, source.x - (compactTrace ? 24 : 0)),
+        y: compactTrace ? positions[index] : source.y,
+        hitY: positions[index],
+      }));
     }
 
     function symbolRows(view: Camera) {
@@ -404,7 +410,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       }
       if (stage === 2) {
         return traceMarkers(view).map((point) => ({
-          x: point.x - 22, y: point.y - 22, width: 44, height: 44,
+          x: point.x - 22, y: point.hitY - 22, width: 44, height: 44,
           point: { x: point.x, y: point.y, z: 0 },
         }));
       }
@@ -529,7 +535,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
           drawing.fillStyle = "#9cf5e6";
           drawing.fillRect(18, 94 + row * 35, 3, 34);
           drawing.restore();
-          const cycle = frame.reduced ? -1 : (frame.time % 8) / 0.38;
+          const cycle = frame.reduced || frame.phase >= 1.5 ? -1 : (frame.time % 8) / 0.38;
           if (cycle >= 0 && cycle < decoderSteps.length) {
             const activeRow = decoderSteps[Math.floor(cycle)];
             drawing.fillStyle = "#0abab51e";
@@ -620,17 +626,18 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
     function drawTrace(view: Camera, opacity: number) {
       drawing.save();
       drawing.globalAlpha *= opacity;
-      const z = planeZ(1, view) - 0.025;
-      const rail = -3.22;
+      const z = planeZ(1, view);
+      const offset = planeOffset(1);
+      const rail = -3.22 + offset;
       const selected = selection[2];
       path([[rail, instructionY(0), z], [rail, instructionY(6), z]], view, "#4baf98");
-      path([[2.95, instructionY(5), z], [3.25, instructionY(5), z], [3.25, instructionY(2), z], [2.95, instructionY(2), z]], view, "#0abab5");
-      polygon([[3.04, instructionY(2) - 0.055, z], [2.94, instructionY(2), z], [3.04, instructionY(2) + 0.055, z]], view, "#9cf5e6");
+      path([[2.95 + offset, instructionY(5), z], [3.25 + offset, instructionY(5), z], [3.25 + offset, instructionY(2), z], [2.95 + offset, instructionY(2), z]], view, "#0abab5");
+      polygon([[3.04 + offset, instructionY(2) - 0.055, z], [2.94 + offset, instructionY(2), z], [3.04 + offset, instructionY(2) + 0.055, z]], view, "#9cf5e6");
       const markers = traceMarkers(view);
       stopRows.forEach((row, index) => {
         const point = markers[index];
         const active = index === selected;
-        path([[rail, instructionY(row), z], [-2.86, instructionY(row), z]], view, active ? "#9cf5e6" : "#376f60");
+        path([[rail, instructionY(row), z], [-2.86 + offset, instructionY(row), z]], view, active ? "#9cf5e6" : "#376f60");
         drawing.beginPath();
         drawing.moveTo(point.source.x, point.source.y);
         drawing.lineTo(point.x, point.y);
@@ -655,7 +662,7 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       drawing.fillStyle = "#d7fff2";
       drawPointGlow(point.x, point.y, traceGlow);
       drawing.fill();
-      const tag = project([-2.8, -1.92, z], view);
+      const tag = project([-2.8 + offset, -1.92, z], view);
       drawing.font = `400 12px ${mono}`;
       drawing.fillStyle = "#b9f8e8";
       drawing.fillText(`break *0x${(0x401000 + elfInstructions[selectedRow].offset).toString(16)}`, Math.max(18, tag.x), tag.y);
@@ -802,6 +809,10 @@ export default function ElfBackdrop({ onSelect }: { onSelect?: (scene: number, i
       height = bounds.height || innerHeight;
       headerBottom = document.querySelector(".site-header")?.getBoundingClientRect().bottom ?? 96;
       footerHeight = document.querySelector(".site-footer")?.getBoundingClientRect().height ?? 65;
+      // Keep the marker layout stable while scroll and pointer motion change the camera.
+      const traceHeight = Math.max(80, height - headerBottom - footerHeight - 64);
+      const traceScale = Math.min(width / 14, traceHeight / 4.1, 104);
+      compactTrace = width < 760 || traceScale * 3.32 * 35 / 400 < 24;
       const scenes = Array.from(document.querySelectorAll<HTMLElement>(".story-scene"));
       copyTops = scenes.map((scene) => parseFloat(getComputedStyle(scene.querySelector(".scene-panel")!).paddingTop));
       copyRights = scenes.map((scene) => {

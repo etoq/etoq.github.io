@@ -308,7 +308,7 @@ h1, h2, h3, p, figure { margin: 0; }
   .projects-scene .scene-copy-window { width: 38%; max-width: 460px; }
 
   .achievements-scene .scene-panel { padding-top: clamp(150px, 18vh, 220px); }
-  .achievements-scene .scene-copy-window { width: 53%; max-width: 650px; }
+  .achievements-scene .scene-copy-window { width: 40%; max-width: 550px; }
   .achievements-scene .scene-title { font-size: clamp(42px, 5.1vw, 80px); }
   .achievements-scene .scene-intro { max-width: 41ch; font-size: clamp(15px, 1.1vw, 18px); }
 
